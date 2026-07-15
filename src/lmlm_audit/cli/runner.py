@@ -10,6 +10,7 @@ from lmlm_audit.core.backend import (
     audit_example,
     validate_intervention_results,
 )
+from lmlm_audit.core.embeddings import QueryEmbeddingSink, result_example_key
 from lmlm_audit.core.examples import AuditExample, DeletionManifest
 from lmlm_audit.rel_lmlm.backend import RelLMLMAuditBackend
 from lmlm_audit.core.states import DatabaseState
@@ -62,6 +63,7 @@ def run_backend_audit(
     max_new_tokens: int = 12,
     limit: int | None = None,
     bootstrap_oracle_from_full: bool = False,
+    embedding_sink: QueryEmbeddingSink | None = None,
 ) -> list[dict[str, Any]]:
     if not states:
         raise ValueError("At least one audit state is required.")
@@ -73,10 +75,12 @@ def run_backend_audit(
         prompts = prompts[:limit]
 
     results: list[dict[str, Any]] = []
-    for prompt in tqdm(
-        prompts,
-        desc=f"Auditing {prompt_path.stem}",
-        unit="prompt",
+    for row_index, prompt in enumerate(
+        tqdm(
+            prompts,
+            desc=f"Auditing {prompt_path.stem}",
+            unit="prompt",
+        )
     ):
         example = AuditExample.from_prompt_row(prompt)
         prompt_results: list[dict[str, Any]] = []
@@ -129,6 +133,20 @@ def run_backend_audit(
                 )
             )
         validate_intervention_results(prompt_results, expected_states=states)
+        for result in prompt_results:
+            # Numpy arrays must never reach the JSONL writer; route them to
+            # the sidecar (or drop them when no sink is configured).
+            embeddings = result.pop("_query_embeddings", None)
+            if embedding_sink is None or not embeddings:
+                continue
+            key = result_example_key(result, row_index)
+            for item in embeddings:
+                embedding_sink.add(
+                    example_key=key,
+                    state=str(result["state"]),
+                    event_index=int(item["event_index"]),
+                    vector=item["vector"],
+                )
         results.extend(prompt_results)
 
     return results

@@ -11,6 +11,10 @@ class AuditObservation:
     model_output: str
     retrieval_trace: Mapping[str, Any] | None = None
     generation_metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Raw query vectors per retrieval event. Kept out of retrieval_trace
+    # because they are numpy arrays destined for an .npz sidecar, not the
+    # JSONL results.
+    query_embeddings: tuple[Mapping[str, Any], ...] = ()
 
 
 @runtime_checkable
@@ -31,6 +35,7 @@ def default_retrieval_trace(state: DatabaseState) -> dict[str, Any]:
         "trace_available": False,
         "trace_complete": False,
         "retrieval_enabled": retrieval_enabled(state),
+        "del_off_mode": None,
         "retrieval_triggered": False,
         "threshold_fallback": False,
         "lookup_query": None,
@@ -72,7 +77,7 @@ def audit_example(
         if "trace_complete" not in supplied_trace:
             retrieval_trace["trace_complete"] = supplied_trace.get("error") is None
 
-    return {
+    result = {
         "fact_id": example.fact_id,
         "prompt_id": example.prompt_id,
         "subject": example.subject,
@@ -88,6 +93,11 @@ def audit_example(
         "retrieval_trace": retrieval_trace,
         "generation_metadata": dict(observation.generation_metadata),
     }
+    if observation.query_embeddings:
+        # Not JSON-serializable; the runner pops this into the embedding
+        # sidecar before results are written.
+        result["_query_embeddings"] = list(observation.query_embeddings)
+    return result
 
 
 def validate_intervention_results(
@@ -123,10 +133,18 @@ def validate_intervention_results(
         if result.get("state") == DatabaseState.DEL_OFF.value:
             if trace.get("retrieval_enabled") is not False:
                 raise ValueError("DEL-OFF must disable retrieval.")
-            if trace.get("retrieval_triggered") is True:
-                raise ValueError("DEL-OFF unexpectedly triggered retrieval.")
-            if trace.get("retrieval_events"):
-                raise ValueError("DEL-OFF unexpectedly recorded retrieval events.")
+            if trace.get("del_off_mode") == "null-retrieval":
+                # Retrieval fires but every candidate is nulled, so events
+                # are expected; nothing may be retained or selected.
+                if trace.get("selected_candidate") is not None:
+                    raise ValueError("DEL-OFF null-retrieval selected a candidate.")
+                if trace.get("retained_candidates"):
+                    raise ValueError("DEL-OFF null-retrieval retained candidates.")
+            else:
+                if trace.get("retrieval_triggered") is True:
+                    raise ValueError("DEL-OFF unexpectedly triggered retrieval.")
+                if trace.get("retrieval_events"):
+                    raise ValueError("DEL-OFF unexpectedly recorded retrieval events.")
 
         if result.get("state") == DatabaseState.DEL_ON.value:
             manifest = result.get("deletion_manifest") or {}

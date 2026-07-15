@@ -1,14 +1,17 @@
+import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-import sys
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lmlm_audit.core.backend import audit_example
+from lmlm_audit.core.embeddings import QueryEmbeddingSink
 from lmlm_audit.colmlm.answers import _default_support_judge, extract_colmlm_answer
 from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
 from lmlm_audit.core.examples import AuditExample
@@ -143,16 +146,45 @@ def test_del_on_filters_oracle_id_without_mutating_base_index() -> None:
     assert generator.index is index
 
 
-def test_del_off_uses_public_no_retrieval_path_and_never_searches() -> None:
+def test_del_off_default_nulls_retrieval_but_keeps_fact_emission_path() -> None:
     backend, generator, index = _backend()
     result = audit_example(backend, _example(), DatabaseState.DEL_OFF)
 
+    trace = result["retrieval_trace"]
+    assert result["model_output"] == "unknown"
+    assert trace["retrieval_enabled"] is False
+    assert trace["del_off_mode"] == "null-retrieval"
+    assert trace["retrieval_triggered"] is True
+    assert trace["retained_candidates"] == []
+    assert trace["selected_candidate"] is None
+    assert [item["entry_id"] for item in trace["deleted_candidates"]] == [
+        "target-entry"
+    ]
+    assert trace["threshold_fallback"] is True
+    # No over-fetch when everything is excluded anyway.
+    assert index.calls == [(1, 0.7)]
+    assert generator.no_retrieval_calls == []
+
+
+def test_del_off_forbid_token_mode_preserves_legacy_path() -> None:
+    index = FakeIndex([])
+    generator = FakeGenerator(index)
+    backend = CoLMLMAuditBackend(generator, del_off_mode="forbid-token")
+    result = audit_example(backend, _example(), DatabaseState.DEL_OFF)
+
+    trace = result["retrieval_trace"]
     assert result["model_output"] == "Paris"
-    assert result["retrieval_trace"]["retrieval_enabled"] is False
-    assert result["retrieval_trace"]["retrieval_events"] == []
-    assert result["retrieval_trace"]["num_retrievals"] == 0
+    assert trace["retrieval_enabled"] is False
+    assert trace["del_off_mode"] == "forbid-token"
+    assert trace["retrieval_events"] == []
+    assert trace["num_retrievals"] == 0
     assert generator.no_retrieval_calls == [_example().prompt]
     assert index.calls == []
+
+
+def test_unknown_del_off_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="del_off_mode"):
+        CoLMLMAuditBackend(FakeGenerator(FakeIndex([])), del_off_mode="bogus")
 
 
 def test_source_manifest_filters_every_matching_candidate() -> None:
@@ -257,6 +289,89 @@ def test_runner_can_bootstrap_reviewable_oracle_manifest_from_full(tmp_path) -> 
     assert results[1]["retrieval_trace"]["selected_candidate"]["entry_id"] == (
         "neighbor-entry"
     )
+
+
+class FakeNestedIndex(FakeIndex):
+    """Mimics RetrieverIndex.search, which wraps results per query."""
+
+    def search(self, query, top_k=1, similarity_threshold=None):
+        return [super().search(query, top_k, similarity_threshold)]
+
+
+def test_nested_result_lists_are_flattened_for_single_queries() -> None:
+    index = FakeNestedIndex(
+        [
+            FakeSearchResult(
+                id="target-entry",
+                score=0.95,
+                text_value="Paris",
+                metadata={"source_id": "wiki:France"},
+            ),
+        ]
+    )
+    backend = CoLMLMAuditBackend(FakeGenerator(index))
+    result = audit_example(backend, _example(), DatabaseState.FULL)
+
+    assert result["model_output"] == "Paris"
+    assert result["retrieval_trace"]["selected_candidate"]["entry_id"] == (
+        "target-entry"
+    )
+
+
+def test_full_captures_query_embeddings_outside_the_trace() -> None:
+    backend, _, _ = _backend()
+    result = audit_example(backend, _example(), DatabaseState.FULL)
+
+    embeddings = result["_query_embeddings"]
+    assert [item["event_index"] for item in embeddings] == [0]
+    np.testing.assert_array_equal(
+        embeddings[0]["vector"], np.asarray([1.0], dtype=np.float32)
+    )
+
+    event = result["retrieval_trace"]["retrieval_events"][0]
+    assert event["query_embedding_captured"] is True
+    assert event["query_dim"] == 1
+    assert event["query_l2_norm"] == pytest.approx(1.0)
+
+
+def test_runner_routes_embeddings_to_sidecar_and_keeps_results_serializable(
+    tmp_path,
+) -> None:
+    backend, _, _ = _backend()
+    prompt_path = tmp_path / "prompts.jsonl"
+    prompt_path.write_text(
+        '{"prompt_id":"p1","fact_id":"f1","prompt_text":"What is the capital of France?",'
+        '"gold_object":"Paris"}\n',
+        encoding="utf-8",
+    )
+    sink = QueryEmbeddingSink()
+
+    results = run_backend_audit(
+        prompt_path=prompt_path,
+        backend=backend,
+        states=[
+            DatabaseState.FULL,
+            DatabaseState.DEL_ON,
+            DatabaseState.DEL_OFF,
+        ],
+        bootstrap_oracle_from_full=True,
+        embedding_sink=sink,
+    )
+
+    assert all("_query_embeddings" not in result for result in results)
+    json.dumps(results)
+
+    sidecar_path = tmp_path / "query_embeddings.npz"
+    sink.save(sidecar_path)
+    with np.load(sidecar_path) as stored:
+        assert sorted(stored.keys()) == [
+            "p1/DEL-OFF/event0",
+            "p1/DEL-ON/event0",
+            "p1/FULL/event0",
+        ]
+        np.testing.assert_array_equal(
+            stored["p1/FULL/event0"], np.asarray([1.0], dtype=np.float32)
+        )
 
 
 def test_public_loader_arguments_map_to_release_factory() -> None:

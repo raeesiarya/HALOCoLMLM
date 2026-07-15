@@ -1,5 +1,8 @@
 # LMLM Audit
 
+![Tests](badges/tests.svg)
+![Coverage](badges/coverage.svg)
+
 This repository contains the code for [*Auditing Forgetting in Limited Memory
 Language Models*](https://arxiv.org/abs/2607.00605).
 
@@ -42,8 +45,24 @@ the full released checkpoint and index. The next research step is to move past
 single oracle entries and identify all memory entries that express the same
 fact.
 
-More implementation details are in
-[docs/COLMLM_INTEGRATION.md](docs/COLMLM_INTEGRATION.md).
+## Repository structure
+
+The audit code lives in `src/lmlm_audit/`, split into four subpackages:
+
+- `core/` — backend-agnostic pieces: the abstract backend interface, database
+  states, forgetting metrics, answer-equivalence checks, and prompt/example
+  handling.
+- `rel_lmlm/` — the original relational-LMLM backend: model loader, triple
+  database, and deletion logic.
+- `colmlm/` — the Co-LMLM backend: wrappers around the public model and index
+  interfaces, search-time ID filtering for non-destructive deletion, and answer
+  extraction.
+- `cli/` — the `lmlm-audit` entry point (`run_audit.py`), the audit runner, and
+  result/metrics reporting.
+
+Databases and prompt sets are under `data/`: the released LMLM database with
+six prompt types, and three custom domains (countries, politicians, sports)
+with base/alias/collision/noise variants.
 
 ## Setup
 

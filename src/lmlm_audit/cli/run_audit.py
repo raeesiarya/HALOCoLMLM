@@ -10,6 +10,7 @@ from lmlm_audit.cli.jobs import (
     AuditJob,
     resolve_audit_jobs,
 )
+from lmlm_audit.core.embeddings import QueryEmbeddingSink
 from lmlm_audit.core.metrics import metrics_total
 from lmlm_audit.rel_lmlm.backend import RelLMLMAuditBackend
 from lmlm_audit.cli.reporting import (
@@ -149,6 +150,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--del-off-mode",
+        choices=["null-retrieval", "forbid-token"],
+        default="null-retrieval",
+        help=(
+            "How the Co-LMLM backend implements DEL-OFF. 'null-retrieval' keeps "
+            "<FACT> emission and returns zero candidates so the fact-token "
+            "distribution matches DEL-ON; 'forbid-token' is the legacy behavior "
+            "that suppresses retrieval tokens entirely."
+        ),
+    )
+    parser.add_argument(
         "--disable-dblookup",
         action="store_true",
         help="Deprecated shortcut for running only the DEL-OFF state.",
@@ -227,6 +239,7 @@ def main() -> None:
                     db_path=args.entries_db_path,
                     source_path=args.colmlm_source_path,
                     use_sqlite_id_mapping=args.use_sqlite_id_mapping,
+                    del_off_mode=args.del_off_mode,
                     device=args.device,
                     torch_dtype=args.torch_dtype,
                     attn_implementation=attn_implementation,
@@ -254,6 +267,9 @@ def main() -> None:
                 logger.print(
                     f"Running audit for {job.prompt_path} with database {database_path}"
                 )
+                embedding_sink = (
+                    QueryEmbeddingSink() if args.backend == "colmlm" else None
+                )
                 results = run_backend_audit(
                     prompt_path=job.prompt_path,
                     backend=backend,
@@ -263,9 +279,18 @@ def main() -> None:
                     bootstrap_oracle_from_full=(
                         args.backend == "colmlm" and args.bootstrap_oracle_from_full
                     ),
+                    embedding_sink=embedding_sink,
                 )
 
                 save_results(results, job.output_path)
+                if embedding_sink is not None and len(embedding_sink):
+                    sidecar_path = job.output_path.with_name(
+                        f"{job.prompt_path.stem}_query_embeddings.npz"
+                    )
+                    embedding_sink.save(sidecar_path)
+                    logger.print(
+                        f"Wrote query-embedding sidecar to {sidecar_path}"
+                    )
                 total_metrics = metrics_total(results)
                 metrics_by_state = {
                     state.value: metrics_total(

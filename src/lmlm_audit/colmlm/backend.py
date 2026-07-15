@@ -22,11 +22,17 @@ class CoLMLMAuditBackend:
     )
     answer_extractor: Callable[[str, str], str] = extract_colmlm_answer
     max_filter_overfetch: int = 4096
+    del_off_mode: str = "null-retrieval"
     release_source: str | None = None
 
     def __post_init__(self) -> None:
         if self.max_filter_overfetch < 0:
             raise ValueError("max_filter_overfetch cannot be negative.")
+        if self.del_off_mode not in ("null-retrieval", "forbid-token"):
+            raise ValueError(
+                "del_off_mode must be 'null-retrieval' or 'forbid-token', "
+                f"got {self.del_off_mode!r}."
+            )
 
     @classmethod
     def from_public_release(
@@ -37,6 +43,7 @@ class CoLMLMAuditBackend:
         db_path: str | Path | None = None,
         source_path: str | Path | None = None,
         use_sqlite_id_mapping: bool = False,
+        del_off_mode: str = "null-retrieval",
         **loader_kwargs: Any,
     ) -> "CoLMLMAuditBackend":
         release_source = None
@@ -79,7 +86,11 @@ class CoLMLMAuditBackend:
             use_sqlite_id_mapping=use_sqlite_id_mapping,
             **loader_kwargs,
         )
-        return cls(generator=generator, release_source=release_source)
+        return cls(
+            generator=generator,
+            del_off_mode=del_off_mode,
+            release_source=release_source,
+        )
 
     def generate(
         self,
@@ -103,7 +114,10 @@ class CoLMLMAuditBackend:
         original_index = getattr(self.generator, "index", None)
         filtered_index: _FilteringSearchIndex | None = None
         try:
-            if state is DatabaseState.DEL_OFF:
+            if (
+                state is DatabaseState.DEL_OFF
+                and self.del_off_mode == "forbid-token"
+            ):
                 no_retrieval = getattr(self.generator, "generate_no_retrieval", None)
                 if no_retrieval is None:
                     raise CoLMLMIntegrationError(
@@ -124,6 +138,7 @@ class CoLMLMAuditBackend:
                     excluded_source_ids=frozenset(
                         manifest.source_ids if state is DatabaseState.DEL_ON else ()
                     ),
+                    exclude_all=state is DatabaseState.DEL_OFF,
                     support_judge=self.support_judge,
                     max_filter_overfetch=self.max_filter_overfetch,
                 )
@@ -157,6 +172,9 @@ class CoLMLMAuditBackend:
             "trace_available": True,
             "trace_complete": True,
             "retrieval_enabled": state is not DatabaseState.DEL_OFF,
+            "del_off_mode": (
+                self.del_off_mode if state is DatabaseState.DEL_OFF else None
+            ),
             "retrieval_triggered": bool(
                 events or num_retrievals or failed_retrievals
             ),
@@ -192,8 +210,18 @@ class CoLMLMAuditBackend:
             ),
             "release_source": self.release_source,
         }
+        query_embeddings = tuple(
+            {"event_index": index, "vector": vector}
+            for index, vector in enumerate(
+                filtered_index.query_embeddings
+                if filtered_index is not None
+                else []
+            )
+            if vector is not None
+        )
         return AuditObservation(
             model_output=self.answer_extractor(raw_text, example.prompt),
             retrieval_trace=retrieval_trace,
             generation_metadata=generation_metadata,
+            query_embeddings=query_embeddings,
         )

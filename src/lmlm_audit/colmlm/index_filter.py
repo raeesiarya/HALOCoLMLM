@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+import numpy as np
+
 from lmlm_audit.colmlm.errors import (
     CoLMLMIntegrationError,
     ExclusionSearchExhaustedError,
@@ -79,8 +81,10 @@ class _FilteringSearchIndex:
     excluded_entry_ids: frozenset[str]
     excluded_source_ids: frozenset[str]
     support_judge: Callable[[Any, AuditExample], Mapping[str, Any]]
+    exclude_all: bool = False
     max_filter_overfetch: int = 4096
     events: list[dict[str, Any]] = field(default_factory=list)
+    query_embeddings: list[np.ndarray | None] = field(default_factory=list)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.base_index, name)
@@ -100,9 +104,17 @@ class _FilteringSearchIndex:
     ) -> list[Any]:
         if top_k < 1:
             raise ValueError("top_k must be at least 1.")
+        try:
+            query_array = np.asarray(query_vector, dtype=np.float32).reshape(-1)
+        except (TypeError, ValueError):
+            query_array = None
+        self.query_embeddings.append(query_array)
         entry_exclusion_count = len(self.excluded_entry_ids)
         source_exclusions_are_unbounded = bool(self.excluded_source_ids)
-        if source_exclusions_are_unbounded:
+        if self.exclude_all:
+            # Every candidate is discarded, so over-fetching buys nothing.
+            extra = 0
+        elif source_exclusions_are_unbounded:
             extra = self.max_filter_overfetch
         else:
             extra = min(entry_exclusion_count, self.max_filter_overfetch)
@@ -123,7 +135,8 @@ class _FilteringSearchIndex:
         deleted: list[Any] = []
         retained: list[Any] = []
         for candidate in candidates:
-            (deleted if self._is_excluded(candidate) else retained).append(candidate)
+            excluded = self.exclude_all or self._is_excluded(candidate)
+            (deleted if excluded else retained).append(candidate)
         selected = retained[:top_k]
 
         event = {
@@ -131,6 +144,14 @@ class _FilteringSearchIndex:
             "threshold": similarity_threshold,
             "requested_top_k": top_k,
             "searched_top_k": search_k,
+            "exclude_all": self.exclude_all,
+            "query_embedding_captured": query_array is not None,
+            "query_dim": None if query_array is None else int(query_array.size),
+            "query_l2_norm": (
+                None
+                if query_array is None
+                else float(np.linalg.norm(query_array))
+            ),
             "all_candidates": [
                 _serialize_candidate(candidate, self.example, self.support_judge)
                 for candidate in candidates
@@ -152,7 +173,8 @@ class _FilteringSearchIndex:
         self.events.append(event)
 
         bounded_out = (
-            (
+            not self.exclude_all
+            and (
                 source_exclusions_are_unbounded
                 or entry_exclusion_count > self.max_filter_overfetch
             )

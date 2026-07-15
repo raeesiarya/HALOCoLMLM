@@ -1,7 +1,7 @@
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from tqdm import tqdm
 
@@ -64,6 +64,9 @@ def run_backend_audit(
     limit: int | None = None,
     bootstrap_oracle_from_full: bool = False,
     embedding_sink: QueryEmbeddingSink | None = None,
+    manifest_builder: (
+        Callable[[AuditExample, dict[str, Any]], DeletionManifest] | None
+    ) = None,
 ) -> list[dict[str, Any]]:
     if not states:
         raise ValueError("At least one audit state is required.")
@@ -110,11 +113,18 @@ def run_backend_audit(
                     "FULL's selected entry did not pass the configured target-support "
                     "judge; supply a reviewed deletion manifest manually."
                 )
-            manifest = DeletionManifest(
-                entry_ids=(str(entry_id),),
-                strategy="oracle-from-full",
-                metadata={"bootstrap": "FULL.selected_candidate"},
-            )
+            if manifest_builder is not None:
+                manifest = manifest_builder(example, full_result)
+                if manifest.is_empty:
+                    raise ValueError(
+                        "The manifest builder produced an empty deletion manifest."
+                    )
+            else:
+                manifest = DeletionManifest(
+                    entry_ids=(str(entry_id),),
+                    strategy="oracle-from-full",
+                    metadata={"bootstrap": "FULL.selected_candidate"},
+                )
             example = dataclasses.replace(example, deletion_manifest=manifest)
             full_result["deletion_manifest"] = manifest.as_dict()
             full_result["retrieval_trace"]["deletion_manifest_id"] = (

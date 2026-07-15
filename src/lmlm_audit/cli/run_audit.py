@@ -150,6 +150,37 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--closure",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated deletion-closure predicates to materialize from "
+            "the FULL pass (Co-LMLM only, requires --bootstrap-oracle-from-full): "
+            "any of geometric, semantic, provenance."
+        ),
+    )
+    parser.add_argument(
+        "--closure-radius",
+        type=float,
+        default=0.85,
+        help="Cosine radius for the geometric closure predicate.",
+    )
+    parser.add_argument(
+        "--closure-envelope-k",
+        type=int,
+        default=500,
+        help="Candidates fetched for the semantic/provenance closure envelope.",
+    )
+    parser.add_argument(
+        "--closure-max-size",
+        type=int,
+        default=10_000,
+        help=(
+            "Maximum entries fetched for the geometric predicate; closures "
+            "that hit this cap are flagged as truncated."
+        ),
+    )
+    parser.add_argument(
         "--del-off-mode",
         choices=["null-retrieval", "forbid-token"],
         default="null-retrieval",
@@ -185,6 +216,39 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def _make_closure_manifest_builder(
+    backend: Any, args: argparse.Namespace, job: AuditJob
+) -> Any:
+    from lmlm_audit.colmlm.closure import (
+        ClosureConfig,
+        build_closure_manifest_from_full,
+    )
+
+    config = ClosureConfig(
+        predicates=tuple(
+            predicate.strip()
+            for predicate in args.closure.split(",")
+            if predicate.strip()
+        ),
+        radius=args.closure_radius,
+        envelope_top_k=args.closure_envelope_k,
+        max_closure_size=args.closure_max_size,
+    )
+    artifact_dir = job.output_path.parent / f"{job.prompt_path.stem}_closures"
+
+    def builder(example: Any, full_result: dict[str, Any]) -> Any:
+        return build_closure_manifest_from_full(
+            index=backend.generator.index,
+            example=example,
+            full_result=full_result,
+            config=config,
+            support_judge=backend.support_judge,
+            artifact_dir=artifact_dir,
+        )
+
+    return builder
+
+
 def main() -> None:
     args = parse_args()
     log_path = args.log_file or (args.output_dir / "run_audit.log")
@@ -200,6 +264,15 @@ def main() -> None:
                 raise ValueError("Co-LMLM runs require --colmlm-model-path.")
             if args.index_path is None:
                 raise ValueError("Co-LMLM runs require --index-path.")
+
+        if args.closure is not None:
+            if args.backend != "colmlm":
+                raise ValueError("--closure requires --backend colmlm.")
+            if not args.bootstrap_oracle_from_full:
+                raise ValueError(
+                    "--closure builds its manifest from the FULL pass and "
+                    "requires --bootstrap-oracle-from-full."
+                )
 
         jobs = resolve_audit_jobs(args)
         if not jobs:
@@ -270,6 +343,11 @@ def main() -> None:
                 embedding_sink = (
                     QueryEmbeddingSink() if args.backend == "colmlm" else None
                 )
+                manifest_builder = (
+                    _make_closure_manifest_builder(backend, args, job)
+                    if args.backend == "colmlm" and args.closure is not None
+                    else None
+                )
                 results = run_backend_audit(
                     prompt_path=job.prompt_path,
                     backend=backend,
@@ -280,9 +358,15 @@ def main() -> None:
                         args.backend == "colmlm" and args.bootstrap_oracle_from_full
                     ),
                     embedding_sink=embedding_sink,
+                    manifest_builder=manifest_builder,
                 )
 
                 save_results(results, job.output_path)
+                if manifest_builder is not None:
+                    logger.print(
+                        "Wrote closure artifacts to "
+                        f"{job.output_path.parent / f'{job.prompt_path.stem}_closures'}"
+                    )
                 if embedding_sink is not None and len(embedding_sink):
                     sidecar_path = job.output_path.with_name(
                         f"{job.prompt_path.stem}_query_embeddings.npz"

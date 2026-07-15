@@ -36,9 +36,13 @@ The repository currently supports:
 - a Co-LMLM backend built around the public model and index interfaces;
 - non-destructive deletion by filtering selected entry or source IDs at search
   time;
-- retrieval traces and cross-state forgetting metrics; and
+- retrieval traces, query-embedding sidecars, and cross-state forgetting
+  metrics;
 - an oracle smoke-test mode that uses the entry retrieved during `FULL` as the
-  deletion target.
+  deletion target; and
+- materialized deletion closures (`--closure geometric,semantic,provenance`)
+  built from the `FULL` pass, with per-entry attribution artifacts and a
+  run-time semantic backstop.
 
 The Co-LMLM backend has unit-test coverage, but it still needs to be run against
 the full released checkpoint and index. The next research step is to move past

@@ -82,6 +82,7 @@ class _FilteringSearchIndex:
     excluded_source_ids: frozenset[str]
     support_judge: Callable[[Any, AuditExample], Mapping[str, Any]]
     exclude_all: bool = False
+    exclude_supporting: bool = False
     max_filter_overfetch: int = 4096
     events: list[dict[str, Any]] = field(default_factory=list)
     query_embeddings: list[np.ndarray | None] = field(default_factory=list)
@@ -111,10 +112,13 @@ class _FilteringSearchIndex:
         self.query_embeddings.append(query_array)
         entry_exclusion_count = len(self.excluded_entry_ids)
         source_exclusions_are_unbounded = bool(self.excluded_source_ids)
+        exclusions_are_unbounded = (
+            source_exclusions_are_unbounded or self.exclude_supporting
+        )
         if self.exclude_all:
             # Every candidate is discarded, so over-fetching buys nothing.
             extra = 0
-        elif source_exclusions_are_unbounded:
+        elif exclusions_are_unbounded:
             extra = self.max_filter_overfetch
         else:
             extra = min(entry_exclusion_count, self.max_filter_overfetch)
@@ -136,6 +140,15 @@ class _FilteringSearchIndex:
         retained: list[Any] = []
         for candidate in candidates:
             excluded = self.exclude_all or self._is_excluded(candidate)
+            if not excluded and self.exclude_supporting:
+                # Semantic-closure backstop: also null any candidate the
+                # support judge marks as expressing the target answer, even
+                # when the materialized closure missed it.
+                excluded = bool(
+                    dict(self.support_judge(candidate, self.example)).get(
+                        "supports_target"
+                    )
+                )
             (deleted if excluded else retained).append(candidate)
         selected = retained[:top_k]
 
@@ -145,6 +158,7 @@ class _FilteringSearchIndex:
             "requested_top_k": top_k,
             "searched_top_k": search_k,
             "exclude_all": self.exclude_all,
+            "exclude_supporting": self.exclude_supporting,
             "query_embedding_captured": query_array is not None,
             "query_dim": None if query_array is None else int(query_array.size),
             "query_l2_norm": (
@@ -175,7 +189,7 @@ class _FilteringSearchIndex:
         bounded_out = (
             not self.exclude_all
             and (
-                source_exclusions_are_unbounded
+                exclusions_are_unbounded
                 or entry_exclusion_count > self.max_filter_overfetch
             )
             and len(candidates) == search_k

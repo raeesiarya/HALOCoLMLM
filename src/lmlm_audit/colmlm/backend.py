@@ -129,6 +129,16 @@ class CoLMLMAuditBackend:
                     raise CoLMLMIntegrationError(
                         "The Co-LMLM generator does not expose its search index."
                     )
+                manifest_predicates = (
+                    manifest.metadata.get("predicates_active")
+                    if isinstance(manifest.metadata, Mapping)
+                    else None
+                )
+                semantic_backstop = (
+                    state is DatabaseState.DEL_ON
+                    and isinstance(manifest_predicates, (list, tuple))
+                    and "semantic" in manifest_predicates
+                )
                 filtered_index = _FilteringSearchIndex(
                     base_index=original_index,
                     example=example,
@@ -139,6 +149,7 @@ class CoLMLMAuditBackend:
                         manifest.source_ids if state is DatabaseState.DEL_ON else ()
                     ),
                     exclude_all=state is DatabaseState.DEL_OFF,
+                    exclude_supporting=semantic_backstop,
                     support_judge=self.support_judge,
                     max_filter_overfetch=self.max_filter_overfetch,
                 )

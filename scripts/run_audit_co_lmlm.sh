@@ -18,8 +18,10 @@ CO_LMLM_REPO_URL="https://github.com/lil-lab/Co-LMLM.git"
 CO_LMLM_DIR="${CO_LMLM_DIR:-$(dirname "$REPO_ROOT")/Co-LMLM}"
 
 INDEX_DIR="${INDEX_DIR:-$REPO_ROOT/data/co-lmlm-wiki-index}"
-PROMPTS="${PROMPTS:-$REPO_ROOT/data/prompts.jsonl}"
-OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/outputs/popqa}"
+# T-REx slot-filling is the default audit corpus (in-context prompts, native
+# continuation format); use PROMPTS=data/prompts.jsonl for the PopQA set.
+PROMPTS="${PROMPTS:-$REPO_ROOT/data/prompts_trex.jsonl}"
+OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/outputs/trex}"
 
 # The audit runs from inside the Co-LMLM checkout, so anchor relative
 # overrides to the invocation directory before we cd away.

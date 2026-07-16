@@ -55,7 +55,10 @@ def main() -> None:
             {
                 "prompt_id": record.get("id"),
                 "fact_id": record.get("id"),
-                "prompt_text": record["question"],
+                # Question + answer stub, following Co-LMLM's own QA evals
+                # (lmlm/eval/append_answer_stub.py): a base LM reads the cue
+                # and emits the answer instead of continuing prose.
+                "prompt_text": f"{record['question']}\nThe answer is",
                 "gold_object": answers[0],
                 "answer_aliases": answers[1:],
             }

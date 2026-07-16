@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Set up a PopQA Co-LMLM audit run:
-#   1. build the PopQA audit prompts   -> data/prompts.jsonl
+# Set up a Co-LMLM audit run:
+#   1. build the T-REx audit prompts   -> data/prompts_trex.jsonl  (default corpus)
+#      and the PopQA audit prompts     -> data/prompts.jsonl
 #   2. download the wiki index bucket  -> data/co-lmlm-wiki-index  (~113 GB!)
 #
 # The model is NOT downloaded here: the audit's loader fetches it from Hugging
@@ -20,7 +21,8 @@ INDEX_DIR="${INDEX_DIR:-$REPO_ROOT/data/co-lmlm-wiki-index}"
 INDEX_FILES=(faiss.index entries.db faiss_id_to_entry_id.txt index_config.json manifest.json)
 INDEX_BASE_URL="https://huggingface.co/buckets/$INDEX_REPO/resolve"
 
-echo "[1/2] Building PopQA audit prompts ..."
+echo "[1/2] Building audit prompts (T-REx default corpus, then PopQA) ..."
+uv run python "$REPO_ROOT/data/prepare_trex_audit.py"
 uv run python "$REPO_ROOT/data/prepare_popqa_audit.py"
 
 echo "[2/2] Downloading wiki index $INDEX_REPO -> $INDEX_DIR (~113 GB) ..."
@@ -34,9 +36,9 @@ done
 
 echo
 echo "Done."
-echo "  Prompts: $REPO_ROOT/data/prompts.jsonl"
+echo "  Prompts: $REPO_ROOT/data/prompts_trex.jsonl (default), $REPO_ROOT/data/prompts.jsonl (PopQA)"
 echo "  Index:   $INDEX_DIR"
 echo "Run the audit with (the model is fetched automatically):"
 echo "  halo-audit --backend co-lmlm --index-path $INDEX_DIR \\"
-echo "    --prompt-files $REPO_ROOT/data/prompts.jsonl --bootstrap-oracle-from-full \\"
-echo "    --output-dir outputs/popqa"
+echo "    --prompt-files $REPO_ROOT/data/prompts_trex.jsonl --bootstrap-oracle-from-full \\"
+echo "    --output-dir outputs/trex"

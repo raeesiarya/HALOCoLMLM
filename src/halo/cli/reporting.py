@@ -172,36 +172,42 @@ def setup_wandb() -> Any:
     return wandb
 
 
-def log_metrics_to_wandb(
-    wandb_module: Any,
-    prompt_path: Path,
-    state: DatabaseState,
-    state_metrics: dict[str, float | int],
-    cross_state_metrics: dict[str, float | int],
-    model_name: str,
-    database_path: Path,
-    max_new_tokens: int,
-    limit: int | None,
-) -> None:
-    prompt_label = str(prompt_path.with_suffix("")).replace("/", "__")
-    run_name = f"{prompt_label}_{state.value}"
-    run = wandb_module.init(
+def start_wandb_run(wandb_module: Any, name: str, config: dict[str, Any]) -> Any:
+    return wandb_module.init(
         project=WANDB_PROJECT,
-        name=run_name,
-        config={
-            "prompt_file": str(prompt_path),
-            "state": state.value,
-            "model_name": model_name,
-            "database_path": str(database_path),
-            "max_new_tokens": max_new_tokens,
-            "limit": limit,
-        },
+        name=name,
+        config=config,
         reinit="finish_previous",
     )
-    metrics_payload = {
-        **{f"state/{key}": value for key, value in state_metrics.items()},
-        **{f"cross_state/{key}": value for key, value in cross_state_metrics.items()},
+
+
+def wandb_log_metrics(run: Any, metrics: dict[str, Any], prefix: str = "") -> None:
+    """Log the numeric entries of `metrics` (skipping None / non-numeric)."""
+    payload = {
+        f"{prefix}{key}": value
+        for key, value in metrics.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
     }
-    run.log(metrics_payload)
-    run.summary.update(metrics_payload)
-    run.finish()
+    if payload:
+        run.log(payload)
+        run.summary.update(payload)
+
+
+def wandb_log_image(run: Any, wandb_module: Any, path: Any, key: str) -> None:
+    if path is not None and Path(path).exists():
+        run.log({key: wandb_module.Image(str(path))})
+
+
+def wandb_log_output_artifacts(
+    run: Any, wandb_module: Any, output_dir: Path, name: str = "halo-outputs"
+) -> None:
+    """Upload every result/metric/plot file under `output_dir` as one artifact
+    (results JSONL, all CSVs, PNGs, embedding sidecars, closure JSON)."""
+    artifact = wandb_module.Artifact(name, type="audit-outputs")
+    added = False
+    for pattern in ("*.jsonl", "*.csv", "*.png", "*.npz", "*.json"):
+        for path in sorted(output_dir.rglob(pattern)):
+            artifact.add_file(str(path), name=str(path.relative_to(output_dir)))
+            added = True
+    if added:
+        run.log_artifact(artifact)

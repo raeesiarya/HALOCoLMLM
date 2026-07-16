@@ -12,9 +12,12 @@ from halo.core.metrics import metrics_total
 from halo.registry import get_backend_spec
 from halo.cli.reporting import (
     AuditLogger,
-    log_metrics_to_wandb,
     save_results,
     setup_wandb,
+    start_wandb_run,
+    wandb_log_image,
+    wandb_log_metrics,
+    wandb_log_output_artifacts,
     write_adversarial_outputs,
     write_entanglement_outputs,
     write_metrics_csvs,
@@ -31,6 +34,7 @@ def main() -> None:
     args = parse_args()
     log_path = args.log_file or (args.output_dir / "run_audit.log")
     logger = AuditLogger(log_path)
+    run = None
 
     try:
         logger.print(f"Logging run_audit output to {log_path}")
@@ -87,6 +91,32 @@ def main() -> None:
         # The audit is the three-way comparison; always run all states.
         states = list(DatabaseState)
         wandb_module = setup_wandb() if args.wandb_activation == "on" else None
+        if wandb_module is not None:
+            mode = (
+                "adversarial"
+                if args.adversarial
+                else "sweep"
+                if args.radius_grid is not None
+                else "standard"
+            )
+            run = start_wandb_run(
+                wandb_module,
+                name=str(args.output_dir).replace("/", "__"),
+                config={
+                    "backend": args.backend,
+                    "mode": mode,
+                    "index_path": str(args.index_path),
+                    "prompt_files": [str(p) for p in (args.prompt_files or [])],
+                    "max_new_tokens": args.max_new_tokens,
+                    "limit": args.limit,
+                    "closure": args.closure,
+                    "closure_radius": args.closure_radius,
+                    "radius_grid": args.radius_grid,
+                    "neighbor_mode": args.neighbor_mode,
+                    "adversarial_topology": args.adversarial_topology,
+                    "bootstrap_oracle_from_full": args.bootstrap_oracle_from_full,
+                },
+            )
 
         jobs_by_group: dict[Any, list[AuditJob]] = defaultdict(list)
         for job in jobs:
@@ -167,6 +197,26 @@ def main() -> None:
                         )
                     for label, path in outputs.items():
                         logger.print(f"Wrote adversarial {label} to {path}")
+                    if run is not None:
+                        stem = job.prompt_path.stem
+                        for row in summary["evasion"]:
+                            if row["evasion_rate"] is not None:
+                                run.log(
+                                    {
+                                        f"{stem}/evasion/eps{row['epsilon']}"
+                                        f"_{row['template']}": row["evasion_rate"]
+                                    }
+                                )
+                        wandb_log_metrics(
+                            run,
+                            {
+                                "margin_auroc": summary["margin_auroc"],
+                                "margin_auroc_facts": summary["margin_auroc_facts"],
+                                "attacked_facts": summary["attacked_facts"],
+                                "executed_generations": summary["executed_generations"],
+                            },
+                            prefix=f"{stem}/adversarial/",
+                        )
                     continue
 
                 if args.radius_grid is not None:
@@ -211,6 +261,27 @@ def main() -> None:
                         )
                     for label, path in outputs.items():
                         logger.print(f"Wrote entanglement {label} to {path}")
+                    if run is not None:
+                        stem = job.prompt_path.stem
+                        if gaps:
+                            wandb_log_metrics(
+                                run,
+                                {
+                                    "g_mean": sum(gaps) / len(gaps),
+                                    "g_min": min(gaps),
+                                    "g_max": max(gaps),
+                                    "facts": len(gaps),
+                                    "swept_facts": summary["swept_facts"],
+                                    "executed_generations": summary["executed_generations"],
+                                },
+                                prefix=f"{stem}/entanglement/",
+                            )
+                        wandb_log_image(
+                            run,
+                            wandb_module,
+                            outputs.get("figure"),
+                            f"{stem}/entanglement_curves",
+                        )
                     continue
 
                 logger.print("DB states: " + ", ".join(state.value for state in states))
@@ -239,6 +310,7 @@ def main() -> None:
                 )
 
                 save_results(results, job.output_path)
+                probe_summary: dict[str, Any] | None = None
                 if manifest_builder is not None:
                     logger.print(
                         "Wrote closure artifacts to "
@@ -337,19 +409,20 @@ def main() -> None:
                     logger.print(f"  Precision: {metrics['precision']:.3f}")
                     logger.print(f"  Recall: {metrics['recall']:.3f}")
                     logger.print(f"  F1: {metrics['f1']:.3f}")
-                    if wandb_module is not None:
-                        log_metrics_to_wandb(
-                            wandb_module=wandb_module,
-                            prompt_path=job.prompt_path,
-                            state=state,
-                            state_metrics=metrics,
-                            cross_state_metrics=total_metrics,
-                            model_name=str(args.backend),
-                            database_path=database_path,
-                            max_new_tokens=args.max_new_tokens,
-                            limit=args.limit,
+
+                if run is not None:
+                    stem = job.prompt_path.stem
+                    wandb_log_metrics(run, total_metrics, prefix=f"{stem}/cross_state/")
+                    for state in states:
+                        wandb_log_metrics(
+                            run,
+                            metrics_by_state[state.value],
+                            prefix=f"{stem}/{state.value}/",
                         )
-                        logger.print(f"  W&B run: {job.prompt_path.stem}_{state.value}")
+                    if probe_summary is not None:
+                        wandb_log_metrics(
+                            run, probe_summary, prefix=f"{stem}/probe/"
+                        )
 
         cross_state_csv_path = args.output_dir / "cross_state_metrics.csv"
         per_state_csv_path = args.output_dir / "per_state_metrics.csv"
@@ -361,7 +434,14 @@ def main() -> None:
         )
         logger.print(f"Wrote cross-state metrics CSV to {cross_state_csv_path}")
         logger.print(f"Wrote per-state metrics CSV to {per_state_csv_path}")
+
+        if run is not None:
+            # Upload every output file (results, all CSVs, plots, sidecars).
+            wandb_log_output_artifacts(run, wandb_module, args.output_dir)
+            logger.print("Uploaded output artifacts to W&B.")
     finally:
+        if run is not None:
+            run.finish()
         logger.close()
 
 

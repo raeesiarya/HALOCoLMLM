@@ -110,11 +110,11 @@ own environment):
 ```bash
 cd /path/to/Co-LMLM
 
-PYTHONPATH=/path/to/HALOCoLMLM/src:src \
+PYTHONPATH=/path/to/halo/src:src \
 uv run python -m halo.run_audit \
   --backend co-lmlm \
-  --index-path /path/to/HALOCoLMLM/data/co-lmlm-wiki-index \
-  --prompt-files /path/to/HALOCoLMLM/data/prompts.jsonl \
+  --index-path /path/to/halo/data/co-lmlm-wiki-index \
+  --prompt-files /path/to/halo/data/prompts.jsonl \
   --bootstrap-oracle-from-full \
   --output-dir /path/to/results
 ```

@@ -75,6 +75,17 @@ class ClosureResult:
     index_nprobe: int | None = None
     target_answer: str = ""
     target_aliases: tuple[str, ...] = ()
+    # Geometry for the margin predictor: the best deleted score and the best
+    # score among observed candidates that survive this closure.
+    s_del: float | None = None
+    s_surv: float | None = None
+    top_survivors: tuple[ClosureEntry, ...] = ()
+
+    @property
+    def margin(self) -> float | None:
+        if self.s_del is None or self.s_surv is None:
+            return None
+        return self.s_del - self.s_surv
 
     def to_manifest(self) -> DeletionManifest:
         entry_counts = {
@@ -122,6 +133,18 @@ class ClosureResult:
             "max_closure_size": self.config.max_closure_size,
             "truncated": self.truncated,
             "index_nprobe": self.index_nprobe,
+            "s_del": self.s_del,
+            "s_surv": self.s_surv,
+            "margin": self.margin,
+            "top_survivors": [
+                {
+                    "entry_id": entry.entry_id,
+                    "score": entry.score,
+                    "source_id": entry.source_id,
+                    "value": entry.value,
+                }
+                for entry in self.top_survivors
+            ],
             "source_ids": list(self.source_ids),
             "entries": [
                 {
@@ -270,6 +293,26 @@ def build_closure_family(
         score = details[entry_id]["score"]
         return (0 if score is not None else 1, -(score or 0.0), entry_id)
 
+    # Every observed candidate with a score, for the margin geometry
+    # (s_del / s_surv). Envelope and geometric pages overlap; keep the best
+    # score per entry.
+    observed_scores: dict[str, float] = {}
+    for candidate in (*geometric_hits, *envelope):
+        entry_id = _candidate_id(candidate)
+        score = _candidate_score(candidate)
+        if not entry_id or score is None:
+            continue
+        if entry_id not in observed_scores or score > observed_scores[entry_id]:
+            observed_scores[entry_id] = score
+            details.setdefault(
+                entry_id,
+                {
+                    "score": score,
+                    "source_id": _candidate_source_id(candidate),
+                    "value": _candidate_text(candidate),
+                },
+            )
+
     family: dict[float, ClosureResult] = {}
     for radius in radii:
         caught = {
@@ -284,6 +327,30 @@ def build_closure_family(
                 note(caught, candidate, "geometric")
         truncated = page_full and (
             last_score is None or radius <= last_score
+        )
+        deleted_scores = [
+            observed_scores[entry_id]
+            for entry_id in caught
+            if entry_id in observed_scores
+        ]
+        survivors = sorted(
+            (
+                (entry_id, score)
+                for entry_id, score in observed_scores.items()
+                if entry_id not in caught
+                and details[entry_id]["source_id"] not in source_ids
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        top_survivors = tuple(
+            ClosureEntry(
+                entry_id=entry_id,
+                score=score,
+                source_id=details[entry_id]["source_id"],
+                value=details[entry_id]["value"],
+                caught_by=(),
+            )
+            for entry_id, score in survivors[:5]
         )
         entries = tuple(
             ClosureEntry(
@@ -304,6 +371,9 @@ def build_closure_family(
             index_nprobe=_index_nprobe(index),
             target_answer=example.ground_truth,
             target_aliases=tuple(example.object_aliases),
+            s_del=max(deleted_scores) if deleted_scores else None,
+            s_surv=survivors[0][1] if survivors else None,
+            top_survivors=top_survivors,
         )
     return family
 

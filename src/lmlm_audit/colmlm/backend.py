@@ -24,6 +24,9 @@ class CoLMLMAuditBackend:
     max_filter_overfetch: int = 4096
     del_off_mode: str = "null-retrieval"
     release_source: str | None = None
+    # Synthetic index entries (adversarial survivors) active for subsequent
+    # generate() calls; set/cleared by the adversarial runner.
+    injections: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         if self.max_filter_overfetch < 0:
@@ -170,6 +173,7 @@ class CoLMLMAuditBackend:
                     exclude_all=state is DatabaseState.DEL_OFF,
                     exclude_supporting=semantic_backstop,
                     backstop_example=backstop_example,
+                    injections=tuple(self.injections),
                     support_judge=self.support_judge,
                     max_filter_overfetch=self.max_filter_overfetch,
                 )

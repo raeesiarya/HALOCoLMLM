@@ -101,6 +101,36 @@ def write_entanglement_outputs(
     }
 
 
+def write_adversarial_outputs(
+    summary: dict[str, Any],
+    output_dir: Path,
+) -> dict[str, Path]:
+    if not summary.get("evasion") and not summary.get("margins"):
+        return {}
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outputs: dict[str, Path] = {}
+
+    evasion_rows = summary.get("evasion") or []
+    if evasion_rows:
+        evasion_path = output_dir / "evasion.csv"
+        with evasion_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(evasion_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(evasion_rows)
+        outputs["evasion"] = evasion_path
+
+    margin_rows = summary.get("margins") or []
+    if margin_rows:
+        margins_path = output_dir / "margins.csv"
+        with margins_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(margin_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(margin_rows)
+        outputs["margins"] = margins_path
+
+    return outputs
+
+
 def save_results(results: list[dict[str, Any]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:

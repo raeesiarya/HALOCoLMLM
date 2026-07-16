@@ -49,7 +49,11 @@ The repository currently supports:
   curves and the entanglement gap G(f); and
 - a representational-leakage probe (`lmlm-audit-probe`) that fits a linear
   readout on frozen query embeddings over a fact-disjoint split and reports
-  L_rep and Δ_rep against the behavioral DEL-OFF baseline.
+  L_rep and Δ_rep against the behavioral DEL-OFF baseline; and
+- an adversarial-closure evaluation (`--adversarial`) that injects synthetic
+  survivor entries just outside the deletion radius, reports the evasion
+  rate Ev(ρ, ε) per value template and topology, and scores a geometry-only
+  margin predictor (AUROC) for retrieval-mediated leakage.
 
 The Co-LMLM backend has unit-test coverage, but it still needs to be run against
 the full released checkpoint and index. The next research step is to move past

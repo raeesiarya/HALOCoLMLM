@@ -18,10 +18,15 @@ from lmlm_audit.cli.reporting import (
     log_metrics_to_wandb,
     save_results,
     setup_wandb,
+    write_adversarial_outputs,
     write_entanglement_outputs,
     write_metrics_csvs,
 )
-from lmlm_audit.cli.runner import run_backend_audit, run_entanglement_sweep
+from lmlm_audit.cli.runner import (
+    run_adversarial_eval,
+    run_backend_audit,
+    run_entanglement_sweep,
+)
 from lmlm_audit.core.states import DatabaseState
 
 
@@ -210,6 +215,48 @@ def parse_args() -> argparse.Namespace:
         help="Maximum neighbors per fact in the entanglement sweep.",
     )
     parser.add_argument(
+        "--adversarial",
+        action="store_true",
+        help=(
+            "Run the adversarial-closure evaluation (Ev and the margin "
+            "predictor) instead of a standard audit. Requires --closure; "
+            "the closure radius rho comes from --closure-radius."
+        ),
+    )
+    parser.add_argument(
+        "--adversarial-epsilons",
+        type=str,
+        default="0.01,0.02,0.05",
+        help="Comma-separated epsilon offsets below rho for survivor keys.",
+    )
+    parser.add_argument(
+        "--adversarial-templates",
+        type=str,
+        default="verbatim,hyphenated,letter-spaced,prefix-cue",
+        help=(
+            "Comma-separated survivor value templates; 'verbatim' is the "
+            "non-evading control."
+        ),
+    )
+    parser.add_argument(
+        "--adversarial-topology",
+        choices=["single", "aliased", "collided", "saturated"],
+        default="single",
+        help="Injection topology for the adversarial evaluation.",
+    )
+    parser.add_argument(
+        "--adversarial-count",
+        type=int,
+        default=3,
+        help="Survivors/decoys per injection for multi-entry topologies.",
+    )
+    parser.add_argument(
+        "--adversarial-seed",
+        type=int,
+        default=0,
+        help="Seed for survivor key directions.",
+    )
+    parser.add_argument(
         "--del-off-mode",
         choices=["null-retrieval", "forbid-token"],
         default="null-retrieval",
@@ -319,7 +366,11 @@ def main() -> None:
         if args.closure is not None:
             if args.backend != "colmlm":
                 raise ValueError("--closure requires --backend colmlm.")
-            if not args.bootstrap_oracle_from_full and args.radius_grid is None:
+            if (
+                not args.bootstrap_oracle_from_full
+                and args.radius_grid is None
+                and not args.adversarial
+            ):
                 raise ValueError(
                     "--closure builds its manifest from the FULL pass and "
                     "requires --bootstrap-oracle-from-full."
@@ -332,6 +383,17 @@ def main() -> None:
                     "--closure."
                 )
             parse_radius_grid(args.radius_grid)
+
+        if args.adversarial:
+            if args.closure is None:
+                raise ValueError(
+                    "--adversarial needs a deletion closure; pass --closure."
+                )
+            if args.radius_grid is not None:
+                raise ValueError(
+                    "--adversarial and --radius-grid are separate evaluation "
+                    "modes; run them individually."
+                )
 
         jobs = resolve_audit_jobs(args)
         if not jobs:
@@ -395,6 +457,75 @@ def main() -> None:
             for job in jobs_by_database[database_path]:
                 logger.print(f"Prompt file: {job.prompt_path}")
                 logger.print(f"Database used: {database_path}")
+
+                if args.adversarial:
+                    from lmlm_audit.colmlm.adversary import AdversarialConfig
+
+                    adversarial_dir = (
+                        job.output_path.parent
+                        / f"{job.prompt_path.stem}_adversarial"
+                    )
+                    summary = run_adversarial_eval(
+                        prompt_path=job.prompt_path,
+                        backend=backend,
+                        index=backend.generator.index,
+                        closure_config=_closure_config_from_args(args),
+                        adversarial_config=AdversarialConfig(
+                            rho=args.closure_radius,
+                            epsilons=tuple(
+                                float(value)
+                                for value in args.adversarial_epsilons.split(",")
+                                if value.strip()
+                            ),
+                            templates=tuple(
+                                value.strip()
+                                for value in args.adversarial_templates.split(",")
+                                if value.strip()
+                            ),
+                            topology=args.adversarial_topology,
+                            count=args.adversarial_count,
+                            seed=args.adversarial_seed,
+                        ),
+                        output_dir=adversarial_dir,
+                        max_new_tokens=args.max_new_tokens,
+                        limit=args.limit,
+                    )
+                    outputs = write_adversarial_outputs(
+                        summary, adversarial_dir
+                    )
+                    logger.print(
+                        f"Adversarial: {summary['attacked_facts']}/"
+                        f"{summary['facts']} facts at rho={summary['rho']}, "
+                        f"topology={summary['topology']} "
+                        f"({summary['executed_generations']} generations)."
+                    )
+                    if summary["skipped_facts"]:
+                        logger.print(
+                            "Skipped facts (no FULL selection/embedding): "
+                            + ", ".join(summary["skipped_facts"])
+                        )
+                    for row in summary["evasion"]:
+                        rate = row["evasion_rate"]
+                        logger.print(
+                            f"  Ev(rho={row['rho']}, eps={row['epsilon']}, "
+                            f"{row['template']}): "
+                            + (f"{rate:.3f}" if rate is not None else "n/a")
+                            + f" over {row['facts']} facts"
+                        )
+                    if summary["margin_auroc"] is not None:
+                        logger.print(
+                            "  Margin-predictor AUROC (survivor proximity "
+                            f"vs R(f)): {summary['margin_auroc']:.3f} over "
+                            f"{summary['margin_auroc_facts']} facts"
+                        )
+                    else:
+                        logger.print(
+                            "  Margin-predictor AUROC: n/a (R(f) has a "
+                            "single class or no scored facts)"
+                        )
+                    for label, path in outputs.items():
+                        logger.print(f"Wrote adversarial {label} to {path}")
+                    continue
 
                 if args.radius_grid is not None:
                     from lmlm_audit.core.neighbors import NeighborConfig

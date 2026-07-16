@@ -453,3 +453,36 @@ def metrics_total(results: list[dict[str, Any]]) -> dict[str, float | int]:
             results
         ),
     }
+
+
+def auroc(scores: list[float], labels: list[bool]) -> float | None:
+    """Rank-based AUROC (Mann-Whitney U with average ranks for ties).
+
+    Returns None when either class is absent."""
+    if len(scores) != len(labels):
+        raise ValueError("scores and labels must have equal length.")
+    positives = sum(1 for label in labels if label)
+    negatives = len(labels) - positives
+    if positives == 0 or negatives == 0:
+        return None
+
+    order = sorted(range(len(scores)), key=lambda idx: scores[idx])
+    ranks = [0.0] * len(scores)
+    position = 0
+    while position < len(order):
+        tie_end = position
+        while (
+            tie_end + 1 < len(order)
+            and scores[order[tie_end + 1]] == scores[order[position]]
+        ):
+            tie_end += 1
+        average_rank = (position + tie_end) / 2 + 1
+        for tied in range(position, tie_end + 1):
+            ranks[order[tied]] = average_rank
+        position = tie_end + 1
+
+    positive_rank_sum = sum(
+        rank for rank, label in zip(ranks, labels) if label
+    )
+    u_statistic = positive_rank_sum - positives * (positives + 1) / 2
+    return u_statistic / (positives * negatives)

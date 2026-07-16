@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 import numpy as np
@@ -87,6 +88,11 @@ class _FilteringSearchIndex:
     # sweep, neighbor prompts run with the *target* fact's manifest, so this
     # differs from `example` (which drives trace serialization).
     backstop_example: AuditExample | None = None
+    # Synthetic entries (colmlm.adversary.InjectedEntry) spliced into the
+    # candidate list by live cosine against the query. They bypass ID/source
+    # exclusion (fresh ids, no source) but face the threshold, exclude_all,
+    # and the semantic backstop like any real candidate.
+    injections: tuple[Any, ...] = ()
     max_filter_overfetch: int = 4096
     events: list[dict[str, Any]] = field(default_factory=list)
     query_embeddings: list[np.ndarray | None] = field(default_factory=list)
@@ -140,6 +146,43 @@ class _FilteringSearchIndex:
                 )
             raw = raw[0]
         candidates = list(raw or [])
+        injected_count = 0
+        if self.injections and query_array is not None:
+            query_norm = float(np.linalg.norm(query_array))
+            if query_norm > 0.0:
+                unit_query = query_array / query_norm
+                for injection in self.injections:
+                    score = float(np.dot(unit_query, injection.vector))
+                    if (
+                        similarity_threshold is not None
+                        and score < similarity_threshold
+                    ):
+                        continue
+                    # Attribute-style, because the Co-LMLM generator reads
+                    # result.text_value on whatever the search returns.
+                    candidates.append(
+                        SimpleNamespace(
+                            id=injection.entry_id,
+                            score=score,
+                            text_value=injection.value,
+                            text_key=None,
+                            metadata={
+                                "synthetic": True,
+                                "template": injection.template,
+                                "target_cosine": injection.target_cosine,
+                            },
+                        )
+                    )
+                    injected_count += 1
+                if injected_count:
+                    candidates.sort(
+                        key=lambda candidate: -(
+                            score
+                            if (score := _candidate_score(candidate))
+                            is not None
+                            else float("-inf")
+                        )
+                    )
         deleted: list[Any] = []
         retained: list[Any] = []
         for candidate in candidates:
@@ -165,6 +208,7 @@ class _FilteringSearchIndex:
             "searched_top_k": search_k,
             "exclude_all": self.exclude_all,
             "exclude_supporting": self.exclude_supporting,
+            "injected_candidates_count": injected_count,
             "query_embedding_captured": query_array is not None,
             "query_dim": None if query_array is None else int(query_array.size),
             "query_l2_norm": (

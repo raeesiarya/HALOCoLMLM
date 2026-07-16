@@ -1,4 +1,5 @@
 import argparse
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from lmlm_audit.cli.jobs import (
 )
 from lmlm_audit.core.embeddings import QueryEmbeddingSink
 from lmlm_audit.core.metrics import metrics_total
-from lmlm_audit.rel_lmlm.backend import RelLMLMAuditBackend
+from lmlm_audit.models.rel_lmlm.backend import RelLMLMAuditBackend
 from lmlm_audit.cli.reporting import (
     AuditLogger,
     log_metrics_to_wandb,
@@ -129,14 +130,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--similarity-threshold",
         type=float,
-        default=0.7,
-        help="Co-LMLM retrieval similarity threshold.",
+        default=None,
+        help=(
+            "Co-LMLM retrieval similarity threshold. Defaults to None to match "
+            "the released model's eval configs (always splice top-1); set a "
+            "value (e.g. 0.7, the training dynamic-replace cutoff) only as a "
+            "deliberate, documented choice, since it shifts FULL toward "
+            "parametric decoding and moves L(f)/R(f)."
+        ),
     )
     parser.add_argument(
         "--retrieval-top-k",
         type=int,
         default=1,
         help="Number of retained Co-LMLM candidates returned to generation.",
+    )
+    parser.add_argument(
+        "--nprobe",
+        type=int,
+        default=None,
+        help=(
+            "IVF nprobe for the Co-LMLM index. Higher values raise recall of "
+            "the geometric closure (approximate IVFPQ search) at some latency "
+            "cost. Recorded in closure manifests."
+        ),
+    )
+    parser.add_argument(
+        "--faiss-mmap",
+        action="store_true",
+        help=(
+            "Memory-map the Co-LMLM FAISS index (sets LMLM_FAISS_MMAP=1) "
+            "instead of loading the full ~59 GB file into RAM."
+        ),
     )
     parser.add_argument(
         "--bootstrap-oracle-from-full",
@@ -295,9 +320,7 @@ def parse_args() -> argparse.Namespace:
 def parse_radius_grid(spec: str) -> tuple[float, ...]:
     parts = spec.split(":")
     if len(parts) != 3:
-        raise ValueError(
-            f"--radius-grid must be 'start:stop:step', got {spec!r}."
-        )
+        raise ValueError(f"--radius-grid must be 'start:stop:step', got {spec!r}.")
     start, stop, step = (float(part) for part in parts)
     if step <= 0:
         raise ValueError("--radius-grid step must be positive.")
@@ -312,7 +335,7 @@ def parse_radius_grid(spec: str) -> tuple[float, ...]:
 
 
 def _closure_config_from_args(args: argparse.Namespace) -> Any:
-    from lmlm_audit.colmlm.closure import ClosureConfig
+    from lmlm_audit.models.co_lmlm.closure import ClosureConfig
 
     return ClosureConfig(
         predicates=tuple(
@@ -326,10 +349,18 @@ def _closure_config_from_args(args: argparse.Namespace) -> Any:
     )
 
 
+def _audit_search_index(backend: Any, args: argparse.Namespace) -> Any:
+    if args.backend == "colmlm":
+        return backend.generator.index
+    from lmlm_audit.models.rel_lmlm.index_adapter import TripleSearchIndex
+
+    return TripleSearchIndex(backend.base_db_manager)
+
+
 def _make_closure_manifest_builder(
     backend: Any, args: argparse.Namespace, job: AuditJob
 ) -> Any:
-    from lmlm_audit.colmlm.closure import build_closure_manifest_from_full
+    from lmlm_audit.models.co_lmlm.closure import build_closure_manifest_from_full
 
     config = _closure_config_from_args(args)
     artifact_dir = job.output_path.parent / f"{job.prompt_path.stem}_closures"
@@ -355,6 +386,10 @@ def main() -> None:
     try:
         logger.print(f"Logging run_audit output to {log_path}")
 
+        if args.faiss_mmap:
+            # Must be set before the Co-LMLM loader reads the FAISS file.
+            os.environ["LMLM_FAISS_MMAP"] = "1"
+
         if args.backend == "colmlm":
             if args.prompt_files is None:
                 raise ValueError("Co-LMLM runs require explicit --prompt-files.")
@@ -364,9 +399,18 @@ def main() -> None:
                 raise ValueError("Co-LMLM runs require --index-path.")
 
         if args.closure is not None:
-            if args.backend != "colmlm":
-                raise ValueError("--closure requires --backend colmlm.")
-            if (
+            if args.backend == "rel-lmlm":
+                if args.radius_grid is None and not args.adversarial:
+                    raise ValueError(
+                        "--closure with the rel-LMLM backend is used through "
+                        "--radius-grid or --adversarial."
+                    )
+                if "provenance" in args.closure:
+                    raise ValueError(
+                        "rel-LMLM triples carry no provenance metadata; use "
+                        "--closure geometric,semantic."
+                    )
+            elif (
                 not args.bootstrap_oracle_from_full
                 and args.radius_grid is None
                 and not args.adversarial
@@ -379,8 +423,7 @@ def main() -> None:
         if args.radius_grid is not None:
             if args.closure is None:
                 raise ValueError(
-                    "--radius-grid sweeps the closure radius and requires "
-                    "--closure."
+                    "--radius-grid sweeps the closure radius and requires --closure."
                 )
             parse_radius_grid(args.radius_grid)
 
@@ -420,7 +463,7 @@ def main() -> None:
 
         for database_path in sorted(jobs_by_database):
             if args.backend == "colmlm":
-                from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
+                from lmlm_audit.models.co_lmlm.backend import CoLMLMAuditBackend
 
                 attn_implementation = (
                     None
@@ -440,9 +483,10 @@ def main() -> None:
                     max_new_tokens=args.max_new_tokens,
                     similarity_threshold=args.similarity_threshold,
                     retrieval_top_k=args.retrieval_top_k,
+                    **({"nprobe": args.nprobe} if args.nprobe is not None else {}),
                 )
             else:
-                from lmlm_audit.rel_lmlm.loader import load_model_and_tokenizer
+                from lmlm_audit.models.rel_lmlm.loader import load_model_and_tokenizer
 
                 model, tokenizer = load_model_and_tokenizer(
                     model_name=args.model_name,
@@ -459,16 +503,15 @@ def main() -> None:
                 logger.print(f"Database used: {database_path}")
 
                 if args.adversarial:
-                    from lmlm_audit.colmlm.adversary import AdversarialConfig
+                    from lmlm_audit.models.co_lmlm.adversary import AdversarialConfig
 
                     adversarial_dir = (
-                        job.output_path.parent
-                        / f"{job.prompt_path.stem}_adversarial"
+                        job.output_path.parent / f"{job.prompt_path.stem}_adversarial"
                     )
                     summary = run_adversarial_eval(
                         prompt_path=job.prompt_path,
                         backend=backend,
-                        index=backend.generator.index,
+                        index=_audit_search_index(backend, args),
                         closure_config=_closure_config_from_args(args),
                         adversarial_config=AdversarialConfig(
                             rho=args.closure_radius,
@@ -490,9 +533,7 @@ def main() -> None:
                         max_new_tokens=args.max_new_tokens,
                         limit=args.limit,
                     )
-                    outputs = write_adversarial_outputs(
-                        summary, adversarial_dir
-                    )
+                    outputs = write_adversarial_outputs(summary, adversarial_dir)
                     logger.print(
                         f"Adversarial: {summary['attacked_facts']}/"
                         f"{summary['facts']} facts at rho={summary['rho']}, "
@@ -530,14 +571,11 @@ def main() -> None:
                 if args.radius_grid is not None:
                     from lmlm_audit.core.neighbors import NeighborConfig
 
-                    sweep_dir = (
-                        job.output_path.parent
-                        / f"{job.prompt_path.stem}_sweep"
-                    )
+                    sweep_dir = job.output_path.parent / f"{job.prompt_path.stem}_sweep"
                     summary = run_entanglement_sweep(
                         prompt_path=job.prompt_path,
                         backend=backend,
-                        index=backend.generator.index,
+                        index=_audit_search_index(backend, args),
                         radii=parse_radius_grid(args.radius_grid),
                         closure_config=_closure_config_from_args(args),
                         neighbor_config=NeighborConfig(
@@ -563,10 +601,7 @@ def main() -> None:
                             "Skipped facts (no FULL selection/embedding): "
                             + ", ".join(summary["skipped_facts"])
                         )
-                    gaps = [
-                        item["gap"]
-                        for item in summary["entanglement"].values()
-                    ]
+                    gaps = [item["gap"] for item in summary["entanglement"].values()]
                     if gaps:
                         logger.print(
                             f"G(f): mean {sum(gaps) / len(gaps):.3f}, "
@@ -581,9 +616,9 @@ def main() -> None:
                 logger.print(
                     f"Running audit for {job.prompt_path} with database {database_path}"
                 )
-                embedding_sink = (
-                    QueryEmbeddingSink() if args.backend == "colmlm" else None
-                )
+                # Both backends capture query embeddings now (Co-LMLM: the
+                # <FACT> hidden state; rel-LMLM: the encoded lookup text).
+                embedding_sink = QueryEmbeddingSink()
                 manifest_builder = (
                     _make_closure_manifest_builder(backend, args, job)
                     if args.backend == "colmlm" and args.closure is not None
@@ -613,9 +648,7 @@ def main() -> None:
                         f"{job.prompt_path.stem}_query_embeddings.npz"
                     )
                     embedding_sink.save(sidecar_path)
-                    logger.print(
-                        f"Wrote query-embedding sidecar to {sidecar_path}"
-                    )
+                    logger.print(f"Wrote query-embedding sidecar to {sidecar_path}")
                 total_metrics = metrics_total(results)
                 metrics_by_state = {
                     state.value: metrics_total(

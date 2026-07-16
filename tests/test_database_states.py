@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.rel_lmlm.database import (
+from lmlm_audit.models.rel_lmlm.database import (
     AuditDatabaseManager,
     TargetFact,
     candidate_supports_target_fact,

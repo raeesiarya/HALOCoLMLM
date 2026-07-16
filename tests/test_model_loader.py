@@ -7,8 +7,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.rel_lmlm import loader as model_loader
-from lmlm_audit.rel_lmlm.loader import _get_best_device, _resolve_database_path
+from lmlm_audit.models.rel_lmlm import loader as model_loader
+from lmlm_audit.models.rel_lmlm.loader import _get_best_device, _resolve_database_path
 
 
 
@@ -144,8 +144,8 @@ class TestLoadModelAndTokenizer:
                     "lmlm.modeling_lmlm": fake_lmlm.modeling_lmlm,
                 },
             ),
-            patch("lmlm_audit.rel_lmlm.loader.load_dotenv", dotenv_mock),
-            patch("lmlm_audit.rel_lmlm.loader.AutoTokenizer") as tok_cls,
+            patch("lmlm_audit.models.rel_lmlm.loader.load_dotenv", dotenv_mock),
+            patch("lmlm_audit.models.rel_lmlm.loader.AutoTokenizer") as tok_cls,
             patch.object(torch.cuda, "is_available", return_value=False),
             patch.object(torch.backends.mps, "is_available", return_value=False),
         ):
@@ -176,8 +176,8 @@ class TestLoadModelAndTokenizer:
                     "lmlm.modeling_lmlm": fake_lmlm.modeling_lmlm,
                 },
             ),
-            patch("lmlm_audit.rel_lmlm.loader.load_dotenv"),
-            patch("lmlm_audit.rel_lmlm.loader.AutoTokenizer") as tok_cls,
+            patch("lmlm_audit.models.rel_lmlm.loader.load_dotenv"),
+            patch("lmlm_audit.models.rel_lmlm.loader.AutoTokenizer") as tok_cls,
             patch.object(torch.cuda, "is_available", return_value=False),
             patch.object(torch.backends.mps, "is_available", return_value=False),
         ):
@@ -207,8 +207,8 @@ class TestLoadModelAndTokenizer:
                     "lmlm.modeling_lmlm": fake_lmlm.modeling_lmlm,
                 },
             ),
-            patch("lmlm_audit.rel_lmlm.loader.load_dotenv"),
-            patch("lmlm_audit.rel_lmlm.loader.AutoTokenizer") as tok_cls,
+            patch("lmlm_audit.models.rel_lmlm.loader.load_dotenv"),
+            patch("lmlm_audit.models.rel_lmlm.loader.AutoTokenizer") as tok_cls,
             patch.object(torch.cuda, "is_available", return_value=False),
             patch.object(torch.backends.mps, "is_available", return_value=False),
         ):
@@ -238,8 +238,8 @@ class TestLoadModelAndTokenizer:
                     "lmlm.modeling_lmlm": fake_lmlm.modeling_lmlm,
                 },
             ),
-            patch("lmlm_audit.rel_lmlm.loader.load_dotenv"),
-            patch("lmlm_audit.rel_lmlm.loader.AutoTokenizer") as tok_cls,
+            patch("lmlm_audit.models.rel_lmlm.loader.load_dotenv"),
+            patch("lmlm_audit.models.rel_lmlm.loader.AutoTokenizer") as tok_cls,
             patch.object(torch.cuda, "is_available", return_value=False),
             patch.object(torch.backends.mps, "is_available", return_value=False),
         ):
@@ -270,8 +270,8 @@ class TestLoadModelAndTokenizer:
                     "lmlm.modeling_lmlm": fake_lmlm.modeling_lmlm,
                 },
             ),
-            patch("lmlm_audit.rel_lmlm.loader.load_dotenv"),
-            patch("lmlm_audit.rel_lmlm.loader.AutoTokenizer") as tok_cls,
+            patch("lmlm_audit.models.rel_lmlm.loader.load_dotenv"),
+            patch("lmlm_audit.models.rel_lmlm.loader.AutoTokenizer") as tok_cls,
             patch.object(torch.cuda, "is_available", return_value=False),
             patch.object(torch.backends.mps, "is_available", return_value=False),
         ):

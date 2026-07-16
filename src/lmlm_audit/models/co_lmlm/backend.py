@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from lmlm_audit.core.backend import AuditObservation
-from lmlm_audit.colmlm.answers import _default_support_judge, extract_colmlm_answer
-from lmlm_audit.colmlm.errors import CoLMLMIntegrationError
-from lmlm_audit.colmlm.index_filter import _FilteringSearchIndex
+from lmlm_audit.models.co_lmlm.answers import _default_support_judge, extract_colmlm_answer
+from lmlm_audit.models.co_lmlm.errors import CoLMLMIntegrationError
+from lmlm_audit.models.co_lmlm.index_filter import _FilteringSearchIndex
 from lmlm_audit.core.examples import AuditExample
 from lmlm_audit.core.states import DatabaseState
 

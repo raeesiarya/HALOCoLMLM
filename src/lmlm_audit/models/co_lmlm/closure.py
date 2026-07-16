@@ -9,9 +9,9 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
-from lmlm_audit.colmlm.answers import _default_support_judge
-from lmlm_audit.colmlm.errors import CoLMLMIntegrationError
-from lmlm_audit.colmlm.index_filter import (
+from lmlm_audit.models.co_lmlm.answers import _default_support_judge
+from lmlm_audit.models.co_lmlm.errors import CoLMLMIntegrationError
+from lmlm_audit.models.co_lmlm.index_filter import (
     _candidate_id,
     _candidate_score,
     _candidate_source_id,

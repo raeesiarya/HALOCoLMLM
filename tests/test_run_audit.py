@@ -18,8 +18,8 @@ from lmlm_audit.cli.jobs import (
     infer_prompt_paths_for_database,
     resolve_audit_jobs,
 )
-from lmlm_audit.rel_lmlm import backend as rel_backend
-from lmlm_audit.rel_lmlm.backend import (
+from lmlm_audit.models.rel_lmlm import backend as rel_backend
+from lmlm_audit.models.rel_lmlm.backend import (
     _default_retrieval_trace,
     choose_answer,
     clean_answer,

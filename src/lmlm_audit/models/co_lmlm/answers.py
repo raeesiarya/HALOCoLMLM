@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from lmlm_audit.colmlm.index_filter import _candidate_text
+from lmlm_audit.models.co_lmlm.index_filter import _candidate_text
 from lmlm_audit.core.equivalence import normalize_text
 from lmlm_audit.core.examples import AuditExample
 

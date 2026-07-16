@@ -117,7 +117,7 @@ def fake_base_manager():
 
 @pytest.fixture
 def basic_target_fact():
-    from lmlm_audit.rel_lmlm.database import TargetFact
+    from lmlm_audit.models.rel_lmlm.database import TargetFact
 
     return TargetFact(
         fact_id=10,

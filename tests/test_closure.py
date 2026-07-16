@@ -11,8 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lmlm_audit.core.backend import audit_example
-from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.colmlm.closure import (
+from lmlm_audit.models.co_lmlm.backend import CoLMLMAuditBackend
+from lmlm_audit.models.co_lmlm.closure import (
     ClosureConfig,
     build_closure,
     build_closure_manifest_from_full,

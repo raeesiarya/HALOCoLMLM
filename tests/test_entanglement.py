@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.colmlm.closure import ClosureConfig, build_closure_family
+from lmlm_audit.models.co_lmlm.backend import CoLMLMAuditBackend
+from lmlm_audit.models.co_lmlm.closure import ClosureConfig, build_closure_family
 from lmlm_audit.core.entanglement import compute_entanglement
 from lmlm_audit.core.examples import AuditExample
 from lmlm_audit.core.neighbors import (

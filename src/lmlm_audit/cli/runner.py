@@ -22,7 +22,7 @@ from lmlm_audit.core.neighbors import (
     neighbor_keys,
     write_neighbors_file,
 )
-from lmlm_audit.rel_lmlm.backend import RelLMLMAuditBackend
+from lmlm_audit.models.rel_lmlm.backend import RelLMLMAuditBackend
 from lmlm_audit.core.states import DatabaseState
 
 
@@ -199,7 +199,7 @@ def _full_pass(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, np.ndarray]]:
     """FULL over every prompt, capturing query embeddings. Resumed wholesale
     when both artifacts from a previous run exist."""
-    from lmlm_audit.colmlm.closure import full_query_vector
+    from lmlm_audit.models.co_lmlm.closure import full_query_vector
 
     full_rows_path = output_dir / "full_results.jsonl"
     embeddings_path = output_dir / "full_query_embeddings.npz"
@@ -254,7 +254,7 @@ def run_entanglement_sweep(
     prompts under DEL-ON. Per-radius JSONL files make the sweep resumable:
     (target, role, subject) triples already on disk are skipped.
     """
-    from lmlm_audit.colmlm.closure import (
+    from lmlm_audit.models.co_lmlm.closure import (
         build_closure_family,
         full_query_vector,
         full_selected_candidate,
@@ -402,8 +402,8 @@ def run_adversarial_eval(
     (yielding R(f)) -> one injected DEL-ON per (epsilon, template). Rows are
     appended to a resumable JSONL keyed by (fact, role, epsilon, template).
     """
-    from lmlm_audit.colmlm.adversary import build_injections
-    from lmlm_audit.colmlm.closure import (
+    from lmlm_audit.models.co_lmlm.adversary import build_injections
+    from lmlm_audit.models.co_lmlm.closure import (
         build_closure_family,
         full_selected_candidate,
         write_closure_artifact,

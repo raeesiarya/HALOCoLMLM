@@ -9,15 +9,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.colmlm.adversary import (
+from lmlm_audit.models.co_lmlm.adversary import (
     AdversarialConfig,
     build_injections,
     survivor_key,
     survivor_value,
     template_evades_judge,
 )
-from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.colmlm.closure import ClosureConfig, build_closure_family
+from lmlm_audit.models.co_lmlm.backend import CoLMLMAuditBackend
+from lmlm_audit.models.co_lmlm.closure import ClosureConfig, build_closure_family
 from lmlm_audit.core.backend import audit_example
 from lmlm_audit.core.examples import AuditExample
 from lmlm_audit.core.metrics import auroc

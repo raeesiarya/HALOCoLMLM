@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lmlm_audit.core.backend import audit_example
 from lmlm_audit.core.embeddings import QueryEmbeddingSink
-from lmlm_audit.colmlm.answers import _default_support_judge, extract_colmlm_answer
-from lmlm_audit.colmlm.backend import CoLMLMAuditBackend
+from lmlm_audit.models.co_lmlm.answers import _default_support_judge, extract_colmlm_answer
+from lmlm_audit.models.co_lmlm.backend import CoLMLMAuditBackend
 from lmlm_audit.core.examples import AuditExample
 from lmlm_audit.cli.runner import run_backend_audit
 from lmlm_audit.core.states import DatabaseState
@@ -378,7 +378,7 @@ def test_public_loader_arguments_map_to_release_factory() -> None:
     generator = FakeGenerator(FakeIndex([]))
     loader = SimpleNamespace(load_retriever_generator=lambda **_kwargs: generator)
 
-    with patch("lmlm_audit.colmlm.backend.importlib.import_module", return_value=loader) as load_module:
+    with patch("lmlm_audit.models.co_lmlm.backend.importlib.import_module", return_value=loader) as load_module:
         backend = CoLMLMAuditBackend.from_public_release(
             model_path="model",
             index_path="index",

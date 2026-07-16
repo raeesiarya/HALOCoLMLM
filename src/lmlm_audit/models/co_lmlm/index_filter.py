@@ -6,7 +6,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
-from lmlm_audit.colmlm.errors import (
+from lmlm_audit.models.co_lmlm.errors import (
     CoLMLMIntegrationError,
     ExclusionSearchExhaustedError,
 )
@@ -171,6 +171,10 @@ class _FilteringSearchIndex:
                                 "template": injection.template,
                                 "target_cosine": injection.target_cosine,
                             },
+                            # Match the real SearchResult contract in full so a
+                            # future upstream read of `.vector` cannot break
+                            # only on the real index.
+                            vector=None,
                         )
                     )
                     injected_count += 1

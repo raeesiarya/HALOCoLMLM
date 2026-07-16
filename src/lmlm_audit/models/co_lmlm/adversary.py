@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from lmlm_audit.colmlm.answers import _default_support_judge
+from lmlm_audit.models.co_lmlm.answers import _default_support_judge
 from lmlm_audit.core.examples import AuditExample
 
 VALID_TEMPLATES = ("verbatim", "hyphenated", "letter-spaced", "prefix-cue")

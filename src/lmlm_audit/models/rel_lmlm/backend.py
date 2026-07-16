@@ -1,11 +1,12 @@
 import html
 import re
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping
 
 from lmlm_audit.core.backend import AuditObservation, default_retrieval_trace
 from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.rel_lmlm.database import build_state_db_manager
+from lmlm_audit.models.rel_lmlm.database import build_state_db_manager
+from lmlm_audit.models.rel_lmlm.index_adapter import rel_support_judge
 from lmlm_audit.core.states import DatabaseState, retrieval_enabled
 
 
@@ -204,6 +205,14 @@ class RelLMLMAuditBackend:
     base_db_manager: Any
     model: Any
     tokenizer: Any
+    # Support judge used by the closure builder / sweep runners; full-triple
+    # equivalence when subject/relation are available.
+    support_judge: Callable[[Any, AuditExample], Mapping[str, Any]] = (
+        rel_support_judge
+    )
+    # Synthetic candidates (adversarial survivors) active for subsequent
+    # generate() calls; set/cleared by the adversarial runner.
+    injections: tuple[Any, ...] = ()
 
     def generate(
         self,
@@ -213,10 +222,18 @@ class RelLMLMAuditBackend:
         max_new_tokens: int = 12,
     ) -> AuditObservation:
         prompt_row = dict(example.source_row)
+        if not prompt_row:
+            prompt_row = {
+                "subject": example.subject,
+                "relation": example.relation,
+                "gold_object": example.ground_truth,
+            }
         self.model.db_manager = build_state_db_manager(
             base_db_manager=self.base_db_manager,
             prompt_row=prompt_row,
             state=state,
+            deletion_manifest=example.deletion_manifest,
+            injections=self.injections,
         )
         if hasattr(self.model.db_manager, "reset_trace"):
             self.model.db_manager.reset_trace()
@@ -229,7 +246,28 @@ class RelLMLMAuditBackend:
             enable_dblookup=retrieval_enabled(state),
         )
         retrieval_trace = getattr(self.model.db_manager, "last_trace", None)
+        if retrieval_trace is not None and "retrieval_events" not in retrieval_trace:
+            retrieval_trace = dict(retrieval_trace)
+            # One lookup per generation in this backend; the event wrapper
+            # gives the closure/sweep helpers the same shape as Co-LMLM.
+            retrieval_trace["retrieval_events"] = [
+                {
+                    "event_index": 0,
+                    "selected_candidate": retrieval_trace.get(
+                        "selected_candidate"
+                    ),
+                }
+            ]
+        captured = getattr(
+            self.model.db_manager, "captured_query_embeddings", []
+        )
+        query_embeddings = tuple(
+            {"event_index": index, "vector": vector}
+            for index, vector in enumerate(captured)
+            if vector is not None
+        )
         return AuditObservation(
             model_output=answer,
             retrieval_trace=retrieval_trace,
+            query_embeddings=query_embeddings,
         )

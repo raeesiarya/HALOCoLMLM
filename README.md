@@ -53,7 +53,11 @@ The repository currently supports:
 - an adversarial-closure evaluation (`--adversarial`) that injects synthetic
   survivor entries just outside the deletion radius, reports the evasion
   rate Ev(ρ, ε) per value template and topology, and scores a geometry-only
-  margin predictor (AUROC) for retrieval-mediated leakage.
+  margin predictor (AUROC) for retrieval-mediated leakage; and
+- a rel-LMLM parity path so the closure, entanglement sweep, and adversarial
+  evaluations run against the relational backend's sentence-embedding
+  retrieval too (geometric and semantic predicates only — relational triples
+  carry no provenance), enabling the G(f) = 0 baseline comparison.
 
 The Co-LMLM backend has unit-test coverage, but it still needs to be run against
 the full released checkpoint and index. The next research step is to move past
@@ -62,16 +66,18 @@ fact.
 
 ## Repository structure
 
-The audit code lives in `src/lmlm_audit/`, split into four subpackages:
+The audit code lives in `src/lmlm_audit/`, split into three subpackages:
 
 - `core/` — backend-agnostic pieces: the abstract backend interface, database
   states, forgetting metrics, answer-equivalence checks, and prompt/example
   handling.
-- `rel_lmlm/` — the original relational-LMLM backend: model loader, triple
-  database, and deletion logic.
-- `colmlm/` — the Co-LMLM backend: wrappers around the public model and index
-  interfaces, search-time ID filtering for non-destructive deletion, and answer
-  extraction.
+- `models/` — one subpackage per audited model, so new backends slot in
+  alongside the existing two:
+  - `models/rel_lmlm/` — the original relational-LMLM backend: model loader,
+    triple database, and deletion logic.
+  - `models/co_lmlm/` — the Co-LMLM backend: wrappers around the public model
+    and index interfaces, search-time ID filtering for non-destructive
+    deletion, and answer extraction.
 - `cli/` — the `lmlm-audit` entry point (`run_audit.py`), the audit runner, and
   result/metrics reporting.
 
@@ -105,6 +111,15 @@ uv run lmlm-audit \
 The runner writes one JSONL result file per prompt set, along with per-state and
 cross-state metric CSVs.
 
+The audit deletes non-destructively (it filters retrieval results at query
+time and never mutates the triple database), which matches how upstream builds
+its retriever: the FAISS index is constructed once on first use and never
+rebuilt. Two consequences to keep in mind: do not mutate the base database
+mid-session (the frozen index would go stale), and the upstream on-disk
+retriever cache is keyed only on `<database_name>_<triple_count>`, so two
+different databases that share a name and triple count collide in that cache —
+give distinct databases distinct names.
+
 ## Running the Co-LMLM audit
 
 Co-LMLM and rel-LMLM both use the Python package name `lmlm`, so they should be
@@ -131,6 +146,49 @@ An example prompt file is available at
 [data/colmlm/prompts_smoke.example.jsonl](data/colmlm/prompts_smoke.example.jsonl).
 For a proper experiment, each prompt should use a reviewed deletion manifest
 rather than relying on the oracle bootstrap option.
+
+For the full FineWeb-Edu + Wikipedia index, pass `--faiss-mmap` to memory-map
+the ~59 GB FAISS file instead of loading it into RAM, and use `--nprobe` to
+raise IVF recall (the geometric closure depends on approximate IVFPQ search;
+the value used is recorded in each closure manifest). The index's faiss-id
+mapping determines whether `--use-sqlite-id-mapping` applies — check whether
+the downloaded bucket ships a mapping `.db` or only the `.txt` map before
+enabling it.
+
+## Comparing rel-LMLM and Co-LMLM in one run
+
+`lmlm-audit-compare` runs both backends as a single comparison. Because their
+`lmlm` packages cannot share a process, each backend runs in its own
+environment as a subprocess (pass a uv project dir per leg, or an explicit
+interpreter with `--rel-python` / `--colmlm-python`). The two legs run
+concurrently, and their metric CSVs are merged — tagged with a `backend`
+column — under `<output-dir>/comparison/`.
+
+```bash
+uv run lmlm-audit-compare \
+  --prompt-files /path/to/prompts.jsonl \
+  --output-dir outputs/compare \
+  --rel-env . \
+  --rel-database-path data/custom_databases/countries/base.json \
+  --colmlm-env /path/to/Co-LMLM \
+  --colmlm-source-path /path/to/Co-LMLM \
+  --colmlm-model-path /path/to/CoLMLM-360M-FW \
+  --index-path /path/to/co-lmlm-wiki-index \
+  --entries-db-path /path/to/co-lmlm-wiki-index/entries.db \
+  --bootstrap-oracle-from-full \
+  --radius-grid 0.95:0.70:0.05 \
+  --closure geometric,semantic
+```
+
+Shared evaluation flags (`--radius-grid`, `--closure`, `--adversarial`, the
+neighbor and closure options, `--states`, `--limit`) are forwarded to both
+legs; backend-specific connection flags go to the matching leg only.
+Provenance closure is Co-LMLM-only, so use `--closure geometric,semantic` for
+comparisons. Pass `--skip-rel` / `--skip-colmlm` to re-run a single leg into
+the same comparison tree. The two backends usually live on different machines
+(the Co-LMLM index is large), so in practice the Co-LMLM leg runs on the
+cluster; use `--skip-colmlm` locally and merge later, or point `--colmlm-env`
+at a reachable environment.
 
 ## Papers
 

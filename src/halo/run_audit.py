@@ -91,17 +91,17 @@ def main() -> None:
         # The audit is the three-way comparison; always run all states.
         states = list(DatabaseState)
         wandb_module = setup_wandb() if args.wandb_activation == "on" else None
+        mode = (
+            "adversarial"
+            if args.adversarial
+            else "sweep"
+            if args.radius_grid is not None
+            else "standard"
+        )
         if wandb_module is not None:
-            mode = (
-                "adversarial"
-                if args.adversarial
-                else "sweep"
-                if args.radius_grid is not None
-                else "standard"
-            )
             run = start_wandb_run(
                 wandb_module,
-                name=str(args.output_dir).replace("/", "__"),
+                name=f"{str(args.output_dir).replace('/', '__')}__{mode}",
                 config={
                     "backend": args.backend,
                     "mode": mode,
@@ -133,6 +133,11 @@ def main() -> None:
                 logger.print(f"Prompt file: {job.prompt_path}")
                 logger.print(f"Database used: {database_path}")
 
+                # Sweep and adversarial share one FULL pass per prompt file.
+                shared_full_dir = (
+                    job.output_path.parent / f"{job.prompt_path.stem}_full"
+                )
+
                 if args.adversarial:
                     from halo.interventions.adversary import AdversarialConfig
 
@@ -163,6 +168,7 @@ def main() -> None:
                         output_dir=adversarial_dir,
                         max_new_tokens=args.max_new_tokens,
                         limit=args.limit,
+                        full_dir=shared_full_dir,
                     )
                     outputs = write_adversarial_outputs(summary, adversarial_dir)
                     logger.print(
@@ -237,6 +243,7 @@ def main() -> None:
                         output_dir=sweep_dir,
                         max_new_tokens=args.max_new_tokens,
                         limit=args.limit,
+                        full_dir=shared_full_dir,
                     )
                     outputs = write_entanglement_outputs(
                         summary["entanglement"], sweep_dir

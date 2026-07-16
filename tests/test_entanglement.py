@@ -374,6 +374,37 @@ def test_entanglement_sweep_resumes_without_regenerating(tmp_path) -> None:
     assert second["entanglement"] == first["entanglement"]
 
 
+def test_entanglement_sweep_reuses_shared_full_pass(tmp_path) -> None:
+    index, generator, backend = _sweep_setup()
+    prompt_path = _write_sweep_prompts(tmp_path)
+    full_dir = tmp_path / "full"
+    kwargs = dict(
+        index=index,
+        radii=(0.9, 0.5),
+        closure_config=ClosureConfig(),
+        neighbor_config=NeighborConfig(mode="cosine", ball=0.5, cap=20),
+        full_dir=full_dir,
+    )
+
+    first = run_entanglement_sweep(
+        prompt_path, backend, output_dir=tmp_path / "sweep", **kwargs
+    )
+    # FULL artifacts land in the shared directory, not the sweep directory.
+    assert (full_dir / "full_results.jsonl").is_file()
+    assert (full_dir / "full_query_embeddings.npz").is_file()
+    assert not (tmp_path / "sweep" / "full_results.jsonl").exists()
+    calls_after_first = generator.generate_calls
+
+    # A fresh sweep directory resumes the shared FULL pass: only the sweep
+    # generations run again (2 facts x 2 radii x 2 prompts), no FULL pass.
+    second = run_entanglement_sweep(
+        prompt_path, backend, output_dir=tmp_path / "sweep2", **kwargs
+    )
+    assert second["executed_generations"] == 8
+    assert generator.generate_calls == calls_after_first + 8
+    assert second["entanglement"] == first["entanglement"]
+
+
 # --- CLI grid parsing ------------------------------------------------------
 
 

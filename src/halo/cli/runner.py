@@ -177,6 +177,7 @@ def _full_pass(
     when both artifacts from a previous run exist."""
     from halo.interventions.closure import full_query_vector
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     full_rows_path = output_dir / "full_results.jsonl"
     embeddings_path = output_dir / "full_query_embeddings.npz"
     full_rows: dict[str, dict[str, Any]] = {}
@@ -219,6 +220,7 @@ def run_entanglement_sweep(
     output_dir: Path,
     max_new_tokens: int = 12,
     limit: int | None = None,
+    full_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Radius sweep for the entanglement analysis (E, X, G).
 
@@ -226,7 +228,9 @@ def run_entanglement_sweep(
     FULL-correctness); closures for every radius come from one search per
     fact; then each (fact, radius) runs the target prompt and all neighbor
     prompts under DEL-ON. Per-radius JSONL files make the sweep resumable:
-    (target, role, subject) triples already on disk are skipped.
+    (target, role, subject) triples already on disk are skipped. `full_dir`
+    holds the FULL-pass artifacts (defaults to `output_dir`); point the sweep
+    and the adversarial evaluation at the same directory to share one pass.
     """
     from halo.interventions.closure import (
         build_closure_family,
@@ -239,7 +243,9 @@ def run_entanglement_sweep(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     examples = _load_examples(prompt_path, limit)
-    full_rows, vectors = _full_pass(backend, examples, output_dir, max_new_tokens)
+    full_rows, vectors = _full_pass(
+        backend, examples, full_dir or output_dir, max_new_tokens
+    )
 
     # Closure families: one geometric search per fact covers every radius.
     families: dict[str, dict[float, Any]] = {}
@@ -354,6 +360,7 @@ def run_adversarial_eval(
     output_dir: Path,
     max_new_tokens: int = 12,
     limit: int | None = None,
+    full_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Adversarial-closure evaluation: Ev(rho, epsilon) and the geometry-only
     margin predictor.
@@ -361,6 +368,8 @@ def run_adversarial_eval(
     Per fact: FULL -> closure at rho -> DEL-OFF and baseline DEL-ON rows
     (yielding R(f)) -> one injected DEL-ON per (epsilon, template). Rows are
     appended to a resumable JSONL keyed by (fact, role, epsilon, template).
+    `full_dir` holds the FULL-pass artifacts (defaults to `output_dir`) and
+    can be shared with the entanglement sweep.
     """
     from halo.interventions.adversary import build_injections
     from halo.interventions.closure import (
@@ -373,7 +382,9 @@ def run_adversarial_eval(
     config = adversarial_config
     output_dir.mkdir(parents=True, exist_ok=True)
     examples = _load_examples(prompt_path, limit)
-    full_rows, vectors = _full_pass(backend, examples, output_dir, max_new_tokens)
+    full_rows, vectors = _full_pass(
+        backend, examples, full_dir or output_dir, max_new_tokens
+    )
 
     closures: dict[str, Any] = {}
     skipped: list[str] = []

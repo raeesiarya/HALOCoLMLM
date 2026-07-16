@@ -87,6 +87,20 @@ Extra flags pass through to `halo-audit`, e.g. an entanglement sweep:
   --neighbor-mode cosine
 ```
 
+To run the whole evaluation suite — the standard audit, the entanglement
+sweep, and the adversarial closure — in one command:
+
+```bash
+./scripts/run_audit_suite_co_lmlm.sh
+```
+
+The three phases run sequentially (they share one GPU), the sweep and
+adversarial phases share one FULL pass, and each phase resumes from disk if
+interrupted — re-running the suite skips completed work. Each phase logs to
+W&B as its own run, named `<output-dir>__<mode>`. `CLOSURE`, `RADIUS_GRID`,
+and `NEIGHBOR_MODE` override the defaults
+(`geometric,semantic` / `0.95:0.70:0.05` / `cosine`).
+
 All three states run in every audit; device, dtype, and attention
 implementation are auto-detected. `--index-path` is the memory being audited.
 Results, retrieval traces, embedding sidecars, probe CSVs, and closure

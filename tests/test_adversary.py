@@ -166,8 +166,10 @@ class FakeGenerator:
         self.index = index
         self.generation_config = SimpleNamespace(max_new_tokens=64)
         self.retrieval_config = SimpleNamespace(similarity_threshold=0.7)
+        self.generate_calls = 0
 
     def generate(self, prompt):
+        self.generate_calls += 1
         results = self.index.search(
             QUERY,
             top_k=1,
@@ -374,4 +376,43 @@ def test_adversarial_eval_resumes_without_regenerating(tmp_path) -> None:
 
     second = run_adversarial_eval(prompt_path, backend, **kwargs)
     assert second["executed_generations"] == 0
+    assert second["evasion"] == first["evasion"]
+
+
+def test_adversarial_eval_reuses_shared_full_pass(tmp_path) -> None:
+    index = FakeVectorIndex(
+        [FakeVectorEntry("entry-a", QUERY.copy(), "Paris", "wiki:France")]
+    )
+    generator = FakeGenerator(index)
+    backend = CoLMLMAuditBackend(generator)
+    prompt_path = _write_prompt(tmp_path)
+    full_dir = tmp_path / "full"
+    kwargs = dict(
+        index=index,
+        closure_config=ClosureConfig(predicates=("geometric",), radius=0.85),
+        adversarial_config=AdversarialConfig(
+            rho=0.85, epsilons=(0.05,), templates=("verbatim",)
+        ),
+        full_dir=full_dir,
+    )
+
+    first = run_adversarial_eval(
+        prompt_path, backend, output_dir=tmp_path / "adversarial", **kwargs
+    )
+    # FULL artifacts land in the shared directory, not the mode directory.
+    assert (full_dir / "full_results.jsonl").is_file()
+    assert (full_dir / "full_query_embeddings.npz").is_file()
+    assert not (tmp_path / "adversarial" / "full_results.jsonl").exists()
+    calls_after_first = generator.generate_calls
+
+    # A fresh mode directory resumes the shared FULL pass: only the
+    # del-off/baseline/attack generations run again, no FULL generation.
+    second = run_adversarial_eval(
+        prompt_path, backend, output_dir=tmp_path / "adversarial2", **kwargs
+    )
+    assert second["executed_generations"] == first["executed_generations"]
+    assert (
+        generator.generate_calls
+        == calls_after_first + second["executed_generations"]
+    )
     assert second["evasion"] == first["evasion"]

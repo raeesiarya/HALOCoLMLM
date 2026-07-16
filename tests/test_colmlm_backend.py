@@ -10,14 +10,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.core.backend import audit_example
-from lmlm_audit.core.embeddings import QueryEmbeddingSink
-from lmlm_audit.interventions.judge import default_support_judge
+from halo.core.backend import audit_example
+from halo.core.embeddings import QueryEmbeddingSink
+from halo.interventions.judge import default_support_judge
 from models.co_lmlm.backend import extract_colmlm_answer
 from models.co_lmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.cli.runner import run_backend_audit
-from lmlm_audit.core.states import DatabaseState
+from halo.core.examples import AuditExample
+from halo.cli.runner import run_backend_audit
+from halo.core.states import DatabaseState
 
 
 @dataclass

@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.interventions.adversary import (
+from halo.interventions.adversary import (
     AdversarialConfig,
     build_injections,
     survivor_key,
@@ -17,13 +17,13 @@ from lmlm_audit.interventions.adversary import (
     template_evades_judge,
 )
 from models.co_lmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.interventions.closure import ClosureConfig, build_closure_family
-from lmlm_audit.core.backend import audit_example
-from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.core.metrics import auroc
-from lmlm_audit.cli.reporting import write_adversarial_outputs
-from lmlm_audit.cli.runner import run_adversarial_eval
-from lmlm_audit.core.states import DatabaseState
+from halo.interventions.closure import ClosureConfig, build_closure_family
+from halo.core.backend import audit_example
+from halo.core.examples import AuditExample
+from halo.core.metrics import auroc
+from halo.cli.reporting import write_adversarial_outputs
+from halo.cli.runner import run_adversarial_eval
+from halo.core.states import DatabaseState
 
 
 # --- survivor construction -------------------------------------------------

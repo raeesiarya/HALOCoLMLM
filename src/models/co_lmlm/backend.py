@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from lmlm_audit.core.backend import AuditObservation
-from lmlm_audit.interventions.judge import default_support_judge
-from lmlm_audit.interventions.errors import AuditIntegrationError
-from lmlm_audit.interventions.filtering import _FilteringSearchIndex
-from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.core.states import DatabaseState
+from halo.core.backend import AuditObservation
+from halo.interventions.judge import default_support_judge
+from halo.interventions.errors import AuditIntegrationError
+from halo.interventions.filtering import _FilteringSearchIndex
+from halo.core.examples import AuditExample
+from halo.core.states import DatabaseState
 
 _FACT_BLOCK_PATTERN = re.compile(r"<FACT>.*?</FACT>", re.DOTALL)
 _SPECIAL_TOKEN_PATTERN = re.compile(r"</?[A-Z_]+>")
@@ -108,8 +108,7 @@ class CoLMLMAuditBackend:
             ):
                 raise AuditIntegrationError(
                     "A different `lmlm` package is already imported. Run Co-LMLM "
-                    "in its own process/environment to avoid the rel-LMLM namespace "
-                    "collision."
+                    "in its own process/environment to avoid a namespace collision."
                 )
             sys.path.insert(0, str(source_src))
             release_source = str(source_root)
@@ -119,8 +118,8 @@ class CoLMLMAuditBackend:
             loader = module.load_retriever_generator
         except (ImportError, AttributeError) as exc:
             raise ImportError(
-                "The public Co-LMLM release is required. Run this command from its "
-                "Python 3.12 environment or pass --co-lmlm-source-path."
+                "The public Co-LMLM release is required. Run this command from the "
+                "public Co-LMLM checkout in its Python 3.12 environment."
             ) from exc
 
         # Everything below is auto-resolved — no user-facing device/dtype/attn/

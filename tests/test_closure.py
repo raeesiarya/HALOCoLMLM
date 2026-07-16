@@ -10,16 +10,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.core.backend import audit_example
+from halo.core.backend import audit_example
 from models.co_lmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.interventions.closure import (
+from halo.interventions.closure import (
     ClosureConfig,
     build_closure,
     build_closure_manifest_from_full,
 )
-from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.cli.runner import run_backend_audit
-from lmlm_audit.core.states import DatabaseState
+from halo.core.examples import AuditExample
+from halo.cli.runner import run_backend_audit
+from halo.core.states import DatabaseState
 
 
 @dataclass

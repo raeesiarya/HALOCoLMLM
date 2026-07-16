@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lmlm_audit.core.probe import (
+from halo.core.probe import (
     ProbeConfig,
     ProbeSample,
     answer_features,

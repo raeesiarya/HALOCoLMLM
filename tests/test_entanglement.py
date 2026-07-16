@@ -11,17 +11,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from models.co_lmlm.backend import CoLMLMAuditBackend
-from lmlm_audit.interventions.closure import ClosureConfig, build_closure_family
-from lmlm_audit.core.entanglement import compute_entanglement
-from lmlm_audit.core.examples import AuditExample
-from lmlm_audit.core.neighbors import (
+from halo.interventions.closure import ClosureConfig, build_closure_family
+from halo.core.entanglement import compute_entanglement
+from halo.core.examples import AuditExample
+from halo.core.neighbors import (
     NeighborConfig,
     compute_cosine_neighbors,
     compute_same_source_neighbors,
 )
-from lmlm_audit.cli.reporting import write_entanglement_outputs
-from lmlm_audit.cli.args import parse_radius_grid
-from lmlm_audit.cli.runner import run_entanglement_sweep
+from halo.cli.reporting import write_entanglement_outputs
+from halo.cli.args import parse_radius_grid
+from halo.cli.runner import run_entanglement_sweep
 
 
 # --- pure metrics ----------------------------------------------------------

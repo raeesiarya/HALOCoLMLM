@@ -36,7 +36,7 @@ from lmlm_audit.cli.reporting import (
     setup_wandb,
     write_metrics_csvs,
 )
-from lmlm_audit.cli.run_audit import parse_args
+from lmlm_audit.cli.args import parse_args
 from lmlm_audit.cli.runner import (
     load_prompts,
     run_backend_audit,

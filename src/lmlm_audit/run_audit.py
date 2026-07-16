@@ -1,19 +1,15 @@
-import argparse
-import os
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
-from lmlm_audit.cli.jobs import (
-    DEFAULT_DATABASE_PATH,
-    DEFAULT_OUTPUT_DIR,
-    AuditJob,
-    resolve_audit_jobs,
+from lmlm_audit.cli.args import parse_args, parse_radius_grid
+from lmlm_audit.cli.closure_setup import (
+    closure_config_from_args,
+    make_closure_manifest_builder,
 )
+from lmlm_audit.cli.jobs import AuditJob, resolve_audit_jobs
 from lmlm_audit.core.embeddings import QueryEmbeddingSink
 from lmlm_audit.core.metrics import metrics_total
-from lmlm_audit.registry import available_backends, get_backend_spec
-import models  # noqa: F401  (imports register the bundled backends)
+from lmlm_audit.registry import get_backend_spec
 from lmlm_audit.cli.reporting import (
     AuditLogger,
     log_metrics_to_wandb,
@@ -31,345 +27,6 @@ from lmlm_audit.cli.runner import (
 from lmlm_audit.core.states import DatabaseState
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the prompt audit.")
-    parser.add_argument(
-        "--backend",
-        choices=available_backends(),
-        default="rel-lmlm",
-        help="Inference backend to audit (registered under src/models).",
-    )
-    parser.add_argument(
-        "--prompt-files",
-        nargs="+",
-        type=Path,
-        default=None,
-        help=(
-            "Specific prompt JSONL files to audit. If omitted, run all prompt files for "
-            "all custom databases under data/custom_databases."
-        ),
-    )
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=12,
-        help="Maximum number of tokens to generate per prompt.",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Optional cap on the number of prompts to run per file.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directory where JSONL audit results will be written.",
-    )
-    parser.add_argument(
-        "--log-file",
-        type=Path,
-        default=None,
-        help=(
-            "Optional path for a run log file. Defaults to <output-dir>/run_audit.log "
-            "when omitted."
-        ),
-    )
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default="kilian-group/LMLM-llama2-382M",
-        help="rel-LMLM model name or checkpoint. Use --colmlm-model-path for Co-LMLM.",
-    )
-    parser.add_argument(
-        "--colmlm-model-path",
-        type=Path,
-        default=None,
-        help="Local Co-LMLM checkpoint directory.",
-    )
-    parser.add_argument(
-        "--index-path",
-        type=Path,
-        default=None,
-        help="Local Co-LMLM retrieval-index directory.",
-    )
-    parser.add_argument(
-        "--entries-db-path",
-        type=Path,
-        default=None,
-        help="Optional Co-LMLM entries.db path used to resolve index results.",
-    )
-    parser.add_argument(
-        "--colmlm-source-path",
-        type=Path,
-        default=None,
-        help="Path to a public lil-lab/Co-LMLM checkout (or its src directory).",
-    )
-    parser.add_argument(
-        "--use-sqlite-id-mapping",
-        action="store_true",
-        help="Use the large index's SQLite FAISS-ID to entry-ID mapping.",
-    )
-    parser.add_argument(
-        "--device",
-        default="cuda:0",
-        help="Device passed to the public Co-LMLM loader.",
-    )
-    parser.add_argument(
-        "--torch-dtype",
-        choices=["float32", "float16", "bfloat16"],
-        default="bfloat16",
-        help="Model dtype passed to the public Co-LMLM loader.",
-    )
-    parser.add_argument(
-        "--attn-implementation",
-        default="flash_attention_2",
-        help="Transformers attention implementation for Co-LMLM; use 'none' to omit.",
-    )
-    parser.add_argument(
-        "--similarity-threshold",
-        type=float,
-        default=None,
-        help=(
-            "Co-LMLM retrieval similarity threshold. Defaults to None to match "
-            "the released model's eval configs (always splice top-1); set a "
-            "value (e.g. 0.7, the training dynamic-replace cutoff) only as a "
-            "deliberate, documented choice, since it shifts FULL toward "
-            "parametric decoding and moves L(f)/R(f)."
-        ),
-    )
-    parser.add_argument(
-        "--retrieval-top-k",
-        type=int,
-        default=1,
-        help="Number of retained Co-LMLM candidates returned to generation.",
-    )
-    parser.add_argument(
-        "--nprobe",
-        type=int,
-        default=None,
-        help=(
-            "IVF nprobe for the Co-LMLM index. Higher values raise recall of "
-            "the geometric closure (approximate IVFPQ search) at some latency "
-            "cost. Recorded in closure manifests."
-        ),
-    )
-    parser.add_argument(
-        "--faiss-mmap",
-        action="store_true",
-        help=(
-            "Memory-map the Co-LMLM FAISS index (sets LMLM_FAISS_MMAP=1) "
-            "instead of loading the full ~59 GB file into RAM."
-        ),
-    )
-    parser.add_argument(
-        "--bootstrap-oracle-from-full",
-        action="store_true",
-        help=(
-            "For schema-free rows without a manifest, use a FULL selected entry "
-            "that passes the support judge as the oracle deletion ID."
-        ),
-    )
-    parser.add_argument(
-        "--database-path",
-        type=Path,
-        default=DEFAULT_DATABASE_PATH,
-        help=(
-            "Path to a specific database JSON file. When provided without --prompt-files, "
-            "run all prompt files in the sibling prompts/<variant>/ directory if present."
-        ),
-    )
-    parser.add_argument(
-        "--closure",
-        type=str,
-        default=None,
-        help=(
-            "Comma-separated deletion-closure predicates to materialize from "
-            "the FULL pass (Co-LMLM only, requires --bootstrap-oracle-from-full): "
-            "any of geometric, semantic, provenance."
-        ),
-    )
-    parser.add_argument(
-        "--closure-radius",
-        type=float,
-        default=0.85,
-        help="Cosine radius for the geometric closure predicate.",
-    )
-    parser.add_argument(
-        "--closure-envelope-k",
-        type=int,
-        default=500,
-        help="Candidates fetched for the semantic/provenance closure envelope.",
-    )
-    parser.add_argument(
-        "--closure-max-size",
-        type=int,
-        default=10_000,
-        help=(
-            "Maximum entries fetched for the geometric predicate; closures "
-            "that hit this cap are flagged as truncated."
-        ),
-    )
-    parser.add_argument(
-        "--radius-grid",
-        type=str,
-        default=None,
-        help=(
-            "Descending cosine-radius grid 'start:stop:step' (e.g. "
-            "0.95:0.70:0.05). Switches the run into an entanglement sweep; "
-            "requires --closure and --backend colmlm."
-        ),
-    )
-    parser.add_argument(
-        "--neighbor-mode",
-        choices=["cosine", "same-source"],
-        default="cosine",
-        help="How N(f) is defined for the entanglement sweep.",
-    )
-    parser.add_argument(
-        "--neighbor-ball",
-        type=float,
-        default=0.5,
-        help="Cosine ball for --neighbor-mode cosine.",
-    )
-    parser.add_argument(
-        "--neighbor-cap",
-        type=int,
-        default=20,
-        help="Maximum neighbors per fact in the entanglement sweep.",
-    )
-    parser.add_argument(
-        "--adversarial",
-        action="store_true",
-        help=(
-            "Run the adversarial-closure evaluation (Ev and the margin "
-            "predictor) instead of a standard audit. Requires --closure; "
-            "the closure radius rho comes from --closure-radius."
-        ),
-    )
-    parser.add_argument(
-        "--adversarial-epsilons",
-        type=str,
-        default="0.01,0.02,0.05",
-        help="Comma-separated epsilon offsets below rho for survivor keys.",
-    )
-    parser.add_argument(
-        "--adversarial-templates",
-        type=str,
-        default="verbatim,hyphenated,letter-spaced,prefix-cue",
-        help=(
-            "Comma-separated survivor value templates; 'verbatim' is the "
-            "non-evading control."
-        ),
-    )
-    parser.add_argument(
-        "--adversarial-topology",
-        choices=["single", "aliased", "collided", "saturated"],
-        default="single",
-        help="Injection topology for the adversarial evaluation.",
-    )
-    parser.add_argument(
-        "--adversarial-count",
-        type=int,
-        default=3,
-        help="Survivors/decoys per injection for multi-entry topologies.",
-    )
-    parser.add_argument(
-        "--adversarial-seed",
-        type=int,
-        default=0,
-        help="Seed for survivor key directions.",
-    )
-    parser.add_argument(
-        "--del-off-mode",
-        choices=["null-retrieval", "forbid-token"],
-        default="null-retrieval",
-        help=(
-            "How the Co-LMLM backend implements DEL-OFF. 'null-retrieval' keeps "
-            "<FACT> emission and returns zero candidates so the fact-token "
-            "distribution matches DEL-ON; 'forbid-token' is the legacy behavior "
-            "that suppresses retrieval tokens entirely."
-        ),
-    )
-    parser.add_argument(
-        "--disable-dblookup",
-        action="store_true",
-        help="Deprecated shortcut for running only the DEL-OFF state.",
-    )
-    parser.add_argument(
-        "--states",
-        nargs="+",
-        default=[state.value for state in DatabaseState],
-        choices=[state.value for state in DatabaseState],
-        help="Database states to evaluate.",
-    )
-    parser.add_argument(
-        "--wandb-activation",
-        "--wandb_activation",
-        dest="wandb_activation",
-        type=str,
-        default="off",
-        choices=["on", "off"],
-        help="Enable or disable Weights & Biases logging.",
-    )
-    args = parser.parse_args()
-    return args
-
-
-def parse_radius_grid(spec: str) -> tuple[float, ...]:
-    parts = spec.split(":")
-    if len(parts) != 3:
-        raise ValueError(f"--radius-grid must be 'start:stop:step', got {spec!r}.")
-    start, stop, step = (float(part) for part in parts)
-    if step <= 0:
-        raise ValueError("--radius-grid step must be positive.")
-    if start < stop:
-        raise ValueError("--radius-grid must descend (start >= stop).")
-    radii: list[float] = []
-    radius = start
-    while radius >= stop - 1e-9:
-        radii.append(round(radius, 6))
-        radius -= step
-    return tuple(radii)
-
-
-def _closure_config_from_args(args: argparse.Namespace) -> Any:
-    from lmlm_audit.interventions.closure import ClosureConfig
-
-    return ClosureConfig(
-        predicates=tuple(
-            predicate.strip()
-            for predicate in args.closure.split(",")
-            if predicate.strip()
-        ),
-        radius=args.closure_radius,
-        envelope_top_k=args.closure_envelope_k,
-        max_closure_size=args.closure_max_size,
-    )
-
-
-def _make_closure_manifest_builder(
-    backend: Any, search_index: Any, args: argparse.Namespace, job: AuditJob
-) -> Any:
-    from lmlm_audit.interventions.closure import build_closure_manifest_from_full
-
-    config = _closure_config_from_args(args)
-    artifact_dir = job.output_path.parent / f"{job.prompt_path.stem}_closures"
-
-    def builder(example: Any, full_result: dict[str, Any]) -> Any:
-        return build_closure_manifest_from_full(
-            index=search_index,
-            example=example,
-            full_result=full_result,
-            config=config,
-            support_judge=backend.support_judge,
-            artifact_dir=artifact_dir,
-        )
-
-    return builder
-
-
 def main() -> None:
     args = parse_args()
     log_path = args.log_file or (args.output_dir / "run_audit.log")
@@ -378,10 +35,6 @@ def main() -> None:
     try:
         logger.print(f"Logging run_audit output to {log_path}")
 
-        if args.faiss_mmap:
-            # Must be set before the Co-LMLM loader reads the FAISS file.
-            os.environ["LMLM_FAISS_MMAP"] = "1"
-
         spec = get_backend_spec(args.backend)
         # Backend-specific argument checks (missing paths, unsupported
         # predicates) live with each model; the audit CLI only validates its
@@ -389,7 +42,7 @@ def main() -> None:
         spec.validate(args)
 
         if args.closure is not None:
-            if args.backend == "colmlm" and (
+            if args.backend == "co-lmlm" and (
                 not args.bootstrap_oracle_from_full
                 and args.radius_grid is None
                 and not args.adversarial
@@ -398,7 +51,7 @@ def main() -> None:
                     "--closure builds its manifest from the FULL pass and "
                     "requires --bootstrap-oracle-from-full."
                 )
-            if args.backend != "colmlm" and (
+            if args.backend != "co-lmlm" and (
                 args.radius_grid is None and not args.adversarial
             ):
                 raise ValueError(
@@ -431,10 +84,8 @@ def main() -> None:
                 "pass --prompt-files explicitly."
             )
 
-        state_values = [DatabaseState(state) for state in args.states]
-        if args.disable_dblookup:
-            state_values = [DatabaseState.DEL_OFF]
-        states = state_values
+        # The audit is the three-way comparison; always run all states.
+        states = list(DatabaseState)
         wandb_module = setup_wandb() if args.wandb_activation == "on" else None
 
         jobs_by_group: dict[Any, list[AuditJob]] = defaultdict(list)
@@ -462,7 +113,7 @@ def main() -> None:
                         prompt_path=job.prompt_path,
                         backend=backend,
                         index=search_index,
-                        closure_config=_closure_config_from_args(args),
+                        closure_config=closure_config_from_args(args),
                         adversarial_config=AdversarialConfig(
                             rho=args.closure_radius,
                             epsilons=tuple(
@@ -527,7 +178,7 @@ def main() -> None:
                         backend=backend,
                         index=search_index,
                         radii=parse_radius_grid(args.radius_grid),
-                        closure_config=_closure_config_from_args(args),
+                        closure_config=closure_config_from_args(args),
                         neighbor_config=NeighborConfig(
                             mode=args.neighbor_mode,
                             ball=args.neighbor_ball,
@@ -570,10 +221,8 @@ def main() -> None:
                 # <FACT> hidden state; rel-LMLM: the encoded lookup text).
                 embedding_sink = QueryEmbeddingSink()
                 manifest_builder = (
-                    _make_closure_manifest_builder(
-                        backend, search_index, args, job
-                    )
-                    if args.backend == "colmlm" and args.closure is not None
+                    make_closure_manifest_builder(backend, search_index, args, job)
+                    if args.backend == "co-lmlm" and args.closure is not None
                     else None
                 )
                 results = run_backend_audit(
@@ -583,7 +232,7 @@ def main() -> None:
                     max_new_tokens=args.max_new_tokens,
                     limit=args.limit,
                     bootstrap_oracle_from_full=(
-                        args.backend == "colmlm" and args.bootstrap_oracle_from_full
+                        args.backend == "co-lmlm" and args.bootstrap_oracle_from_full
                     ),
                     embedding_sink=embedding_sink,
                     manifest_builder=manifest_builder,
@@ -601,6 +250,33 @@ def main() -> None:
                     )
                     embedding_sink.save(sidecar_path)
                     logger.print(f"Wrote query-embedding sidecar to {sidecar_path}")
+
+                    # Representational-leakage probe on this job's FULL
+                    # embeddings — runs automatically, skips when too few facts.
+                    from lmlm_audit.core.probe import probe_audit_outputs
+
+                    probe_summary = probe_audit_outputs(
+                        results_paths=[job.output_path],
+                        embeddings_paths=[sidecar_path],
+                        output_dir=job.output_path.parent,
+                        stem=job.prompt_path.stem,
+                    )
+                    if probe_summary is None:
+                        logger.print(
+                            "Probe skipped (too few labeled facts with embeddings)."
+                        )
+                    else:
+                        delta = probe_summary["delta_rep"]
+                        logger.print(
+                            f"Probe L_rep: {probe_summary['l_rep_hat']:.3f}"
+                            + (
+                                f", behavioral L: {probe_summary['l_hat']:.3f}, "
+                                f"Δ_rep: {delta:.3f} over "
+                                f"{probe_summary['facts_common']} facts"
+                                if delta is not None
+                                else " (Δ_rep n/a: no DEL-OFF overlap)"
+                            )
+                        )
                 total_metrics = metrics_total(results)
                 metrics_by_state = {
                     state.value: metrics_total(
@@ -668,10 +344,9 @@ def main() -> None:
                             state=state,
                             state_metrics=metrics,
                             cross_state_metrics=total_metrics,
-                            model_name=(
-                                str(args.colmlm_model_path)
-                                if args.backend == "colmlm"
-                                else args.model_name
+                            model_name=str(
+                                getattr(args, "co_lmlm_model_path", None)
+                                or getattr(args, "model_name", args.backend)
                             ),
                             database_path=database_path,
                             max_new_tokens=args.max_new_tokens,

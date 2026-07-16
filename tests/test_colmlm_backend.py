@@ -372,7 +372,13 @@ def test_runner_routes_embeddings_to_sidecar_and_keeps_results_serializable(
 
 def test_public_loader_arguments_map_to_release_factory() -> None:
     generator = FakeGenerator(FakeIndex([]))
-    loader = SimpleNamespace(load_retriever_generator=lambda **_kwargs: generator)
+    captured: dict = {}
+
+    def fake_loader(**kwargs):
+        captured.update(kwargs)
+        return generator
+
+    loader = SimpleNamespace(load_retriever_generator=fake_loader)
 
     with patch(
         "models.co_lmlm.backend.importlib.import_module", return_value=loader
@@ -381,9 +387,15 @@ def test_public_loader_arguments_map_to_release_factory() -> None:
             model_path="model",
             index_path="index",
             db_path="entries.db",
-            use_sqlite_id_mapping=True,
             similarity_threshold=0.7,
         )
 
     assert backend.generator is generator
     load_module.assert_called_once_with("lmlm.eval.hf_generate")
+    # Device/dtype/attn/sqlite are auto-resolved, not passed by the caller.
+    assert captured["retrieval_top_k"] == 1
+    assert captured["similarity_threshold"] == 0.7
+    assert captured["use_sqlite_id_mapping"] is False  # no mapping .db at "index"
+    assert captured["device"] in ("cuda:0", "mps", "cpu")
+    assert captured["torch_dtype"] in ("bfloat16", "float32")
+    assert "attn_implementation" in captured

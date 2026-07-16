@@ -27,6 +27,16 @@ def _build_backend(args: argparse.Namespace, group_key: Any) -> AuditBackend:
     )
 
 
+def _add_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("rel-LMLM backend")
+    group.add_argument(
+        "--model-name",
+        type=str,
+        default="kilian-group/LMLM-llama2-382M",
+        help="rel-LMLM model name or checkpoint.",
+    )
+
+
 def _search_index(backend: AuditBackend) -> Any:
     from models.rel_lmlm.adapter import build_search_index
 
@@ -53,6 +63,7 @@ register_backend(
         build_backend=_build_backend,
         build_search_index=_search_index,
         group_key=_group_key,
+        add_arguments=_add_arguments,
         validate=_validate,
     )
 )

@@ -556,5 +556,3 @@ def run_adversarial_eval(
         "margin_auroc_facts": len(scored),
         "output_dir": str(output_dir),
     }
-
-

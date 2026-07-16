@@ -88,7 +88,7 @@ class _FilteringSearchIndex:
     # sweep, neighbor prompts run with the *target* fact's manifest, so this
     # differs from `example` (which drives trace serialization).
     backstop_example: AuditExample | None = None
-    # Synthetic entries (colmlm.adversary.InjectedEntry) spliced into the
+    # Synthetic entries (interventions.adversary.InjectedEntry) spliced into the
     # candidate list by live cosine against the query. They bypass ID/source
     # exclusion (fresh ids, no source) but face the threshold, exclude_all,
     # and the semantic backstop like any real candidate.

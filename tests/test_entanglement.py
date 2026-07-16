@@ -20,7 +20,7 @@ from lmlm_audit.core.neighbors import (
     compute_same_source_neighbors,
 )
 from lmlm_audit.cli.reporting import write_entanglement_outputs
-from lmlm_audit.cli.run_audit import parse_radius_grid
+from lmlm_audit.cli.args import parse_radius_grid
 from lmlm_audit.cli.runner import run_entanglement_sweep
 
 

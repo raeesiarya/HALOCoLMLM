@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,26 @@ from lmlm_audit.core.states import DatabaseState
 
 _FACT_BLOCK_PATTERN = re.compile(r"<FACT>.*?</FACT>", re.DOTALL)
 _SPECIAL_TOKEN_PATTERN = re.compile(r"</?[A-Z_]+>")
+
+_SQLITE_MAPPING_NAMES = ("faiss_id_to_entry_id.db", "faiss_id_to_entry_id.sqlite")
+
+
+def _auto_device_dtype() -> tuple[str, str]:
+    """Best available device and a sane dtype for it — no user flags needed."""
+    try:
+        import torch
+    except ImportError:
+        return "cpu", "float32"
+    if torch.cuda.is_available():
+        return "cuda:0", "bfloat16"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps", "float32"
+    return "cpu", "float32"
+
+
+def _has_sqlite_mapping(index_path: Path) -> bool:
+    return any((index_path / name).exists() for name in _SQLITE_MAPPING_NAMES)
 
 
 def extract_colmlm_answer(raw_text: str, prompt: str) -> str:
@@ -64,9 +85,10 @@ class CoLMLMAuditBackend:
         index_path: str | Path,
         db_path: str | Path | None = None,
         source_path: str | Path | None = None,
-        use_sqlite_id_mapping: bool = False,
+        similarity_threshold: float | None = None,
+        nprobe: int | None = None,
+        max_new_tokens: int = 12,
         del_off_mode: str = "null-retrieval",
-        **loader_kwargs: Any,
     ) -> "CoLMLMAuditBackend":
         release_source = None
         if source_path is not None:
@@ -98,16 +120,32 @@ class CoLMLMAuditBackend:
         except (ImportError, AttributeError) as exc:
             raise ImportError(
                 "The public Co-LMLM release is required. Run this command from its "
-                "Python 3.12 environment or pass --colmlm-source-path."
+                "Python 3.12 environment or pass --co-lmlm-source-path."
             ) from exc
 
-        generator = loader(
+        # Everything below is auto-resolved — no user-facing device/dtype/attn/
+        # sqlite/mmap flags. Memory-map the (large) FAISS file by default.
+        os.environ.setdefault("LMLM_FAISS_MMAP", "1")
+        device, torch_dtype = _auto_device_dtype()
+        loader_kwargs: dict[str, Any] = dict(
             model_path=str(model_path),
             index_path=Path(index_path),
             db_path=Path(db_path) if db_path is not None else None,
-            use_sqlite_id_mapping=use_sqlite_id_mapping,
-            **loader_kwargs,
+            use_sqlite_id_mapping=_has_sqlite_mapping(Path(index_path)),
+            device=device,
+            torch_dtype=torch_dtype,
+            similarity_threshold=similarity_threshold,
+            retrieval_top_k=1,
+            max_new_tokens=max_new_tokens,
         )
+        if nprobe is not None:
+            loader_kwargs["nprobe"] = nprobe
+
+        try:
+            generator = loader(attn_implementation="flash_attention_2", **loader_kwargs)
+        except Exception:
+            # flash-attention-2 is often unavailable; fall back to eager.
+            generator = loader(attn_implementation=None, **loader_kwargs)
         return cls(
             generator=generator,
             del_off_mode=del_off_mode,

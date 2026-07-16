@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from dataclasses import dataclass
@@ -13,6 +14,10 @@ from lmlm_audit.core.equivalence import build_alias_set, normalize_text
 from lmlm_audit.core.metrics import _result_is_correct
 
 VALID_PROBE_MODES = ("ranking", "classification")
+
+# Fewer facts than this and a fact-disjoint fit is meaningless; the probe is
+# skipped rather than run on noise.
+MIN_PROBE_FACTS = 4
 
 
 @dataclass(frozen=True)
@@ -323,4 +328,58 @@ def compute_delta_rep(
         "l_rep_hat": l_rep_hat,
         "l_hat": l_hat,
         "delta_rep": l_rep_hat - l_hat,
+    }
+
+
+def probe_audit_outputs(
+    results_paths: Iterable[Path],
+    embeddings_paths: Iterable[Path],
+    output_dir: Path,
+    *,
+    config: ProbeConfig | None = None,
+    state: str = "FULL",
+    stem: str = "",
+) -> dict[str, Any] | None:
+    """Fit the representational-leakage probe on a finished audit's results +
+    query-embedding sidecar and write the probe CSVs.
+
+    Returns a summary dict, or None when there are too few labeled facts with
+    embeddings to fit a meaningful fact-disjoint probe (the common case for a
+    tiny prompt file — skipped, not an error).
+    """
+    config = config or ProbeConfig()
+    samples = load_probe_samples(embeddings_paths, state=state)
+    labels, behavioral = load_labels_and_behavioral(results_paths)
+    labeled_facts = {s.fact for s in samples if s.fact in labels}
+    if len(labeled_facts) < max(MIN_PROBE_FACTS, config.folds):
+        return None
+
+    report = run_probe(samples, labels, config)
+    delta = compute_delta_rep(report.per_fact, behavioral)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"{stem}_" if stem else ""
+    per_fact_path = output_dir / f"{prefix}probe_per_fact.csv"
+    summary_path = output_dir / f"{prefix}probe_summary.csv"
+
+    per_fact_rows = [
+        {**row, "behavioral_l": behavioral.get(row["fact"])}
+        for row in report.per_fact
+    ]
+    with per_fact_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(per_fact_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(per_fact_rows)
+
+    summary_row = {**report.summary, **delta}
+    with summary_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(summary_row.keys()))
+        writer.writeheader()
+        writer.writerow(summary_row)
+
+    return {
+        **report.summary,
+        **delta,
+        "per_fact_path": per_fact_path,
+        "summary_path": summary_path,
     }

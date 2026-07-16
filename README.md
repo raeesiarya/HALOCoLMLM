@@ -47,18 +47,19 @@ The repository supports both backends through one model-agnostic audit:
   efficacy against collateral damage on neighbor facts
   (`--neighbor-mode cosine|same-source`) and report per-fact operating curves
   and the entanglement gap G(f);
-- a representational-leakage probe (`lmlm-audit-probe`) that fits a linear
-  readout on frozen query embeddings over a fact-disjoint split and reports
-  L_rep and Δ_rep against the behavioral DEL-OFF baseline;
+- a representational-leakage probe (run automatically as part of an audit)
+  that fits a linear readout on frozen query embeddings over a fact-disjoint
+  split and reports L_rep and Δ_rep against the behavioral DEL-OFF baseline;
 - an adversarial-closure evaluation (`--adversarial`) that injects synthetic
   survivor entries just outside the deletion radius, reports the evasion rate
   Ev(ρ, ε) per value template and topology, and scores a geometry-only margin
   predictor (AUROC) for retrieval-mediated leakage;
 - the closure, sweep, and adversarial evaluations on rel-LMLM too (geometric
   and semantic predicates only — relational triples carry no provenance),
-  giving the relational G(f) baseline; and
-- `lmlm-audit-compare`, which runs both backends and merges their metrics into
-  one comparison.
+  giving the relational G(f) baseline.
+
+Both backends emit the same result and metric schema, so a rel-vs-Co-LMLM
+comparison is a join over their output CSVs.
 
 The Co-LMLM backend is unit-tested but has not yet been run against the full
 released checkpoint and index. The closure's semantic and provenance predicates
@@ -79,8 +80,7 @@ The code separates the model-agnostic audit from the model backends:
     judge, and the adversarial survivor construction. These operate on any
     model through a generic search-index interface.
   - `registry.py` — the backend registry the CLI dispatches through.
-  - `cli/` — the `lmlm-audit` / `lmlm-audit-probe` / `lmlm-audit-compare`
-    entry points, the audit runner, and reporting.
+  - `cli/` — the `lmlm-audit` entry point, the audit runner, and reporting.
 - `src/models/` — one subpackage per audited model. Each follows the same
   template so models stay consistent, and each registers a backend with
   `lmlm_audit.registry`, so a new model slots in with no changes to the audit
@@ -119,7 +119,6 @@ uv run pytest
 uv run lmlm-audit \
   --database-path data/custom_databases/countries/base.json \
   --prompt-files data/custom_databases/countries/prompts/base/prompts_direct_questions.jsonl \
-  --states FULL DEL-ON DEL-OFF \
   --output-dir outputs/audit \
   --wandb-activation off
 ```
@@ -146,30 +145,31 @@ environment after downloading its model and index:
 cd /path/to/Co-LMLM
 
 PYTHONPATH=/path/to/HALOCoLMLM/src:src \
-uv run python -m lmlm_audit.cli.run_audit \
-  --backend colmlm \
-  --colmlm-source-path . \
-  --colmlm-model-path /path/to/CoLMLM-360M-FW \
+uv run python -m lmlm_audit.run_audit \
+  --backend co-lmlm \
+  --co-lmlm-source-path . \
+  --co-lmlm-model-path /path/to/CoLMLM-360M-FW \
   --index-path /path/to/co-lmlm-wiki-index \
   --entries-db-path /path/to/co-lmlm-wiki-index/entries.db \
   --prompt-files /path/to/prompts.jsonl \
   --bootstrap-oracle-from-full \
-  --states FULL DEL-ON DEL-OFF \
   --output-dir /path/to/results
 ```
+
+The audit always runs all three states (`FULL`, `DEL-ON`, `DEL-OFF`) and
+auto-detects device, dtype, and attention implementation — there are no flags
+for those.
 
 An example prompt file is available at
 [data/colmlm/prompts_smoke.example.jsonl](data/colmlm/prompts_smoke.example.jsonl).
 For a proper experiment, each prompt should use a reviewed deletion manifest
 rather than relying on the oracle bootstrap option.
 
-For the full FineWeb-Edu + Wikipedia index, pass `--faiss-mmap` to memory-map
-the ~59 GB FAISS file instead of loading it into RAM, and use `--nprobe` to
-raise IVF recall (the geometric closure depends on approximate IVFPQ search;
-the value used is recorded in each closure manifest). The index's faiss-id
-mapping determines whether `--use-sqlite-id-mapping` applies — check whether
-the downloaded bucket ships a mapping `.db` or only the `.txt` map before
-enabling it.
+For the full FineWeb-Edu + Wikipedia index, the backend memory-maps the ~59 GB
+FAISS file by default (set `LMLM_FAISS_MMAP=0` to force it into RAM) and
+auto-uses the SQLite faiss-id mapping when a `.db` ships alongside the index.
+Use `--nprobe` to raise IVF recall (the geometric closure depends on
+approximate IVFPQ search; the value used is recorded in each closure manifest).
 
 ## Sweeps, closures, and the adversarial evaluation
 
@@ -189,55 +189,21 @@ uv run lmlm-audit \
 
 ## Representational-leakage probe
 
-`lmlm-audit-probe` runs offline on a finished audit's results and
-query-embedding sidecar (no GPU):
+A standard audit run automatically fits the representational-leakage probe on
+its own FULL query embeddings (offline, no GPU, no extra command) and writes
+`<prompt>_probe_per_fact.csv` and `<prompt>_probe_summary.csv` next to the
+results — reporting L_rep, the behavioral DEL-OFF baseline L, and Δ_rep. It is
+skipped for prompt files with too few facts to fit a fact-disjoint probe.
 
-```bash
-uv run lmlm-audit-probe \
-  --results outputs/audit/prompts_direct_questions_results.jsonl \
-  --embeddings outputs/audit/prompts_direct_questions_query_embeddings.npz \
-  --mode ranking \
-  --output-dir outputs/probe
-```
+## Comparing rel-LMLM and Co-LMLM
 
-It writes `probe_per_fact.csv` and `probe_summary.csv` (L_rep, behavioral L,
-and Δ_rep). Use `--mode classification` only when answers are shared across
-facts; `ranking` is the default and stays valid under fact-disjoint splits.
-
-## Comparing rel-LMLM and Co-LMLM in one run
-
-`lmlm-audit-compare` runs both backends as a single comparison. Because their
-`lmlm` packages cannot share a process, each backend runs in its own
-environment as a subprocess (pass a uv project dir per leg, or an explicit
-interpreter with `--rel-python` / `--colmlm-python`). The two legs run
-concurrently, and their metric CSVs are merged — tagged with a `backend`
-column — under `<output-dir>/comparison/`.
-
-```bash
-uv run lmlm-audit-compare \
-  --prompt-files /path/to/prompts.jsonl \
-  --output-dir outputs/compare \
-  --rel-env . \
-  --rel-database-path data/custom_databases/countries/base.json \
-  --colmlm-env /path/to/Co-LMLM \
-  --colmlm-source-path /path/to/Co-LMLM \
-  --colmlm-model-path /path/to/CoLMLM-360M-FW \
-  --index-path /path/to/co-lmlm-wiki-index \
-  --entries-db-path /path/to/co-lmlm-wiki-index/entries.db \
-  --bootstrap-oracle-from-full \
-  --radius-grid 0.95:0.70:0.05 \
-  --closure geometric,semantic
-```
-
-Shared evaluation flags (`--radius-grid`, `--closure`, `--adversarial`, the
-neighbor and closure options, `--states`, `--limit`) are forwarded to both
-legs; backend-specific connection flags go to the matching leg only.
-Provenance closure is Co-LMLM-only, so use `--closure geometric,semantic` for
-comparisons. Pass `--skip-rel` / `--skip-colmlm` to re-run a single leg into
-the same comparison tree. The two backends usually live on different machines
-(the Co-LMLM index is large), so in practice the Co-LMLM leg runs on the
-cluster; use `--skip-colmlm` locally and merge later, or point `--colmlm-env`
-at a reachable environment.
+The two backends can't share a process (their `lmlm` packages collide) and
+usually live on different machines — rel-LMLM locally, Co-LMLM on a cluster
+with the large index. So run each backend separately with the same evaluation
+flags into its own `--output-dir`. Because both emit the same result and metric
+schema (`cross_state_metrics.csv`, `entanglement_gaps.csv`, …), the comparison
+is a join over those CSVs by fact and backend — use whatever analysis tool you
+prefer (pandas, a notebook, etc.).
 
 ## Papers
 

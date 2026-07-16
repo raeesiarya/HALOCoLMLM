@@ -11,6 +11,10 @@ def _no_validate(args: argparse.Namespace) -> None:
     return None
 
 
+def _no_arguments(parser: argparse.ArgumentParser) -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class BackendSpec:
     """How the audit application builds and drives one model backend.
@@ -30,6 +34,10 @@ class BackendSpec:
     build_search_index: Callable[[AuditBackend], Any]
     # Jobs sharing a group_key reuse one backend instance.
     group_key: Callable[[argparse.Namespace, Any], Any]
+    # Registers this backend's own CLI arguments (artifact paths and genuine
+    # research knobs — anything with no universal default). The CLI adds only
+    # model-agnostic flags; each model contributes the rest here.
+    add_arguments: Callable[[argparse.ArgumentParser], None] = _no_arguments
     # Backend-specific argument validation (missing paths, unsupported
     # closure predicates, ...). Generic audit-flag validation stays in the CLI.
     validate: Callable[[argparse.Namespace], None] = _no_validate

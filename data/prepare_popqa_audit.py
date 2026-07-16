@@ -6,12 +6,13 @@ from pathlib import Path
 
 POPQA_DATASET = "akariasai/PopQA"
 POPQA_SPLIT = "test"
-# Keep entities whose subject popularity (PopQA `s_pop`) is below this. Lower
-# values retain only well-known entities, which the wiki index is more likely
-# to hold. Set to None to keep every entity.
-MAX_POPULARITY: float | None = 100.0
+# Keep entities whose subject popularity (PopQA `s_pop`, Wikipedia page views)
+# is at least this. Higher values retain only well-known entities, which the
+# wiki index is more likely to hold — the oracle bootstrap needs the retrieved
+# entry to literally contain the answer. Set to None to keep every entity.
+MIN_POPULARITY: float | None = 10_000.0
 # Cap on the number of facts (None = all). A seeded shuffle picks a stable slice.
-LIMIT: int | None = None
+LIMIT: int | None = 1500
 SEED = 0
 
 OUTPUT_DIR = Path(__file__).resolve().parent
@@ -37,9 +38,9 @@ def main() -> None:
     from datasets import load_dataset
 
     dataset = load_dataset(POPQA_DATASET, split=POPQA_SPLIT)
-    if MAX_POPULARITY is not None:
+    if MIN_POPULARITY is not None:
         dataset = dataset.filter(
-            lambda row: row["s_pop"] is not None and row["s_pop"] < MAX_POPULARITY
+            lambda row: row["s_pop"] is not None and row["s_pop"] >= MIN_POPULARITY
         )
     dataset = dataset.shuffle(seed=SEED)
     if LIMIT is not None:

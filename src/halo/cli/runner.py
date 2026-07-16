@@ -66,6 +66,7 @@ def run_backend_audit(
         prompts = prompts[:limit]
 
     results: list[dict[str, Any]] = []
+    skipped: list[tuple[str, str]] = []
     for row_index, prompt in enumerate(
         tqdm(
             prompts,
@@ -92,22 +93,28 @@ def run_backend_audit(
                 "selected_candidate"
             ) or {}
             entry_id = selected.get("entry_id")
+            # A fact the FULL pass cannot verifiably support is un-auditable:
+            # skip it and keep going rather than aborting the whole run.
+            skip_reason = None
             if not entry_id:
-                raise ValueError(
-                    "FULL produced no selected entry ID; cannot bootstrap an oracle manifest."
+                skip_reason = "FULL produced no selected entry ID"
+            elif selected.get("supports_target") is not True:
+                skip_reason = (
+                    "FULL's selected entry did not pass the target-support judge"
                 )
-            if selected.get("supports_target") is not True:
-                raise ValueError(
-                    "FULL's selected entry did not pass the configured target-support "
-                    "judge; supply a reviewed deletion manifest manually."
-                )
-            if manifest_builder is not None:
+            manifest = None
+            if skip_reason is None and manifest_builder is not None:
                 manifest = manifest_builder(example, full_result)
                 if manifest.is_empty:
-                    raise ValueError(
-                        "The manifest builder produced an empty deletion manifest."
-                    )
-            else:
+                    skip_reason = "manifest builder produced an empty manifest"
+            if skip_reason is not None:
+                fact_id = str(
+                    prompt.get("fact_id") or prompt.get("prompt_id") or row_index
+                )
+                skipped.append((fact_id, skip_reason))
+                tqdm.write(f"Skipping fact {fact_id}: {skip_reason}.")
+                continue
+            if manifest is None:
                 manifest = DeletionManifest(
                     entry_ids=(str(entry_id),),
                     strategy="oracle-from-full",
@@ -146,6 +153,13 @@ def run_backend_audit(
                     vector=item["vector"],
                 )
         results.extend(prompt_results)
+
+    if bootstrap_oracle_from_full:
+        audited = len(prompts) - len(skipped)
+        tqdm.write(
+            f"Oracle bootstrap coverage: {audited}/{len(prompts)} facts audited, "
+            f"{len(skipped)} skipped."
+        )
 
     return results
 

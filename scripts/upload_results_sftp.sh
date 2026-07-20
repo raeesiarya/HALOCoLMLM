@@ -40,8 +40,8 @@ if [ ! -d "$OUTPUT_DIR" ]; then
     exit 1
 fi
 
-SSH_OPTS=(-p "$SFTP_PORT")
-SCP_OPTS=(-P "$SFTP_PORT")
+SSH_OPTS=(-p "$SFTP_PORT" -o ConnectTimeout=10)
+SCP_OPTS=(-P "$SFTP_PORT" -o ConnectTimeout=10)
 if [ -n "${SFTP_KEY:-}" ]; then
     SSH_OPTS+=(-i "$SFTP_KEY")
     SCP_OPTS+=(-i "$SFTP_KEY")
@@ -63,7 +63,13 @@ fi
 
 DEST="$SFTP_USER@$SFTP_HOST"
 echo "Ensuring remote directory $SFTP_REMOTE_DIR exists on $DEST"
-"${RUN[@]}" ssh "${SSH_OPTS[@]}" "$DEST" "mkdir -p '$SFTP_REMOTE_DIR'"
+if ! "${RUN[@]}" ssh "${SSH_OPTS[@]}" "$DEST" "mkdir -p '$SFTP_REMOTE_DIR'"; then
+    echo "error: cannot reach $DEST on port $SFTP_PORT." >&2
+    echo "       If SFTP_HOST is a home/LAN address (192.168.x.x, 10.x.x.x)," >&2
+    echo "       it is not reachable from a cloud machine — pull from the" >&2
+    echo "       receiving machine with rsync/scp instead, or use Tailscale." >&2
+    exit 1
+fi
 
 TARBALL="${TARBALL:-1}"
 if [ "$TARBALL" = "1" ]; then

@@ -51,6 +51,18 @@ uv sync
 uv run pytest
 ```
 
+On a GPU host, the Co-LMLM environment additionally requires OpenBLAS as a
+system package; `faiss` fails to import without it:
+
+```bash
+sudo apt-get install -y libopenblas0
+```
+
+The evaluation scripts also extend `LD_LIBRARY_PATH` to the RAPIDS and CUDA
+wheel directories, because `faiss-gpu-cu12-cuvs` does not record an RPATH to
+them and otherwise fails to resolve `libcuvs.so`, `librmm.so`, and
+`libraft.so`.
+
 ## Co-LMLM evaluation
 
 The default setup uses the T-REx prompts and the public Co-LMLM retrieval

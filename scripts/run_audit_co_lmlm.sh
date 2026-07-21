@@ -42,6 +42,23 @@ cd "$CO_LMLM_DIR"
 echo "Syncing the Co-LMLM environment (uv sync) ..."
 uv sync
 
+# faiss-gpu-cu12-cuvs ships without an RPATH to the RAPIDS and CUDA wheel
+# directories, so importing faiss fails on libcuvs.so / librmm.so / libraft.so
+# even though the wheels are installed. Point the dynamic loader at every
+# wheel lib dir in the synced environment.
+rapids_libs="$(
+    find "$CO_LMLM_DIR"/.venv/lib/python*/site-packages -maxdepth 3 -type d \
+        \( -name lib64 -o -name lib \) 2>/dev/null | paste -sd: -
+)"
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$rapids_libs:"*) ;;  # already applied by a calling script
+    *)
+        if [ -n "$rapids_libs" ]; then
+            export LD_LIBRARY_PATH="$rapids_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        fi
+        ;;
+esac
+
 PYTHONPATH="$REPO_ROOT/src:src${PYTHONPATH:+:$PYTHONPATH}" \
 uv run python -m halo.run_audit \
     --backend co-lmlm \

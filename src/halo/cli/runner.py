@@ -4,7 +4,7 @@ import json
 import zlib
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 from tqdm import tqdm
@@ -391,6 +391,79 @@ def _reused_sweep_row(
     return row
 
 
+def _canary_trace_digest(row: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The parts of a row's retrieval trace that explain a canary mismatch."""
+    if not isinstance(row, Mapping):
+        return {}
+    trace = row.get("retrieval_trace") or {}
+    return {
+        "state": trace.get("state"),
+        "model_output": row.get("model_output"),
+        "sweep": row.get("sweep"),
+        "selected_candidate": trace.get("selected_candidate"),
+        "selected_value": trace.get("selected_value"),
+        "num_retrievals": trace.get("num_retrievals"),
+        "failed_retrievals": trace.get("failed_retrievals"),
+        "all_candidates_count": trace.get("all_candidates_count"),
+        "deleted_candidates_count": trace.get("deleted_candidates_count"),
+        # searched_top_k is the discriminator: the FULL pass searches at
+        # k=1 while DEL-ON searches at k=1+|entry_ids|, so a mismatch here
+        # means the two rows were never comparable to begin with.
+        "events": [
+            {
+                "searched_top_k": event.get("searched_top_k"),
+                "requested_top_k": event.get("requested_top_k"),
+                "widened_search_attempts": event.get("widened_search_attempts"),
+                "all_candidates_count": event.get("all_candidates_count"),
+                "deleted_candidates_count": event.get("deleted_candidates_count"),
+                "candidate_ids": [
+                    candidate.get("entry_id")
+                    for candidate in (event.get("all_candidates") or [])
+                ],
+            }
+            for event in (trace.get("retrieval_events") or [])
+        ],
+    }
+
+
+def _write_canary_failure_report(
+    output_dir: Path,
+    *,
+    target_key: str,
+    role: str,
+    subject_key: str,
+    rho: float,
+    reused_from: str,
+    source_origin: str | None,
+    manifest: DeletionManifest,
+    source_row: Mapping[str, Any],
+    generated_row: Mapping[str, Any],
+    full_row: Mapping[str, Any] | None,
+) -> Path:
+    """Dump both sides of a failed canary so the cause is diagnosable from
+    the artifact alone, without re-running the sweep."""
+    path = output_dir / "reuse_canary_failure.json"
+    payload = {
+        "target_key": target_key,
+        "role": role,
+        "subject_key": subject_key,
+        "rho": rho,
+        "served_by": reused_from,
+        "originated_from": source_origin,
+        "manifest": {
+            "manifest_id": manifest.manifest_id,
+            "strategy": manifest.strategy,
+            "entry_ids": list(manifest.entry_ids),
+            "source_ids": list(manifest.source_ids),
+        },
+        "reused": _canary_trace_digest(source_row),
+        "generated": _canary_trace_digest(generated_row),
+        "full_pass": _canary_trace_digest(full_row),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def run_entanglement_sweep(
     prompt_path: Path,
     backend: AuditBackend,
@@ -534,7 +607,13 @@ def run_entanglement_sweep(
                 rows_on_disk[rho][triple] = row
                 sweep_rows.append(row)
 
-    generation_cache: dict[tuple[str, Any], dict[str, Any]] = {}
+    # Cached rows carry their *origin* — the fast path that first vouched for
+    # the generation — alongside the row. A row copied from the FULL pass and
+    # then served again through the fingerprint cache is still, in substance,
+    # a `full_row_unaffected` claim; without this the canary would attribute
+    # the failure to `manifest_fingerprint` and send the reader to the wrong
+    # hook. "executed" marks a genuine generation.
+    generation_cache: dict[tuple[str, Any], tuple[dict[str, Any], str]] = {}
     handles = {
         rho: (output_dir / f"sweep_rho_{rho:.4f}.jsonl").open("a", encoding="utf-8")
         for rho in radii
@@ -565,22 +644,32 @@ def run_entanglement_sweep(
                     )
                     if triple in done[rho]:
                         if cache_key is not None:
+                            resumed = rows_on_disk[rho][triple]
                             generation_cache.setdefault(
-                                cache_key, rows_on_disk[rho][triple]
+                                cache_key,
+                                (
+                                    resumed,
+                                    str(
+                                        (resumed.get("sweep") or {}).get("reused")
+                                        or "executed"
+                                    ),
+                                ),
                             )
                         progress.update(1)
                         continue
                     manifest = manifests[rho]
                     reused_from: str | None = None
                     source_row: dict[str, Any] | None = None
+                    source_origin: str | None = None
                     if cache_key is not None and cache_key in generation_cache:
                         reused_from = "fingerprint"
-                        source_row = generation_cache[cache_key]
+                        source_row, source_origin = generation_cache[cache_key]
                     elif backend_full_row_unaffected(
                         backend, full_rows.get(subject_key), manifest
                     ):
                         reused_from = "full-pass"
                         source_row = full_rows[subject_key]
+                        source_origin = "full-pass"
                     canary = reused_from is not None and _canary_selected(
                         key, role, subject_key, rho, reuse_canary_rate
                     )
@@ -617,17 +706,51 @@ def run_entanglement_sweep(
                         if reused_from is not None:
                             canary_checks += 1
                             row["sweep"]["canary_verified"] = reused_from
+                            row["sweep"]["canary_origin"] = source_origin
                             if row["model_output"] != source_row["model_output"]:
+                                report = _write_canary_failure_report(
+                                    output_dir,
+                                    target_key=key,
+                                    role=role,
+                                    subject_key=subject_key,
+                                    rho=rho,
+                                    reused_from=reused_from,
+                                    source_origin=source_origin,
+                                    manifest=manifest,
+                                    source_row=source_row,
+                                    generated_row=row,
+                                    full_row=full_rows.get(subject_key),
+                                )
+                                hook = (
+                                    "full_row_unaffected"
+                                    if source_origin == "full-pass"
+                                    else "manifest_fingerprint"
+                                )
                                 raise AuditIntegrationError(
                                     f"Reuse canary failed for target {key!r} "
                                     f"({role} {subject_key!r}, rho={rho}): the "
                                     f"{reused_from!r} fast path predicted "
                                     f"{source_row['model_output']!r} but the "
                                     "backend generated "
-                                    f"{row['model_output']!r}."
+                                    f"{row['model_output']!r}. The reused row "
+                                    f"originated from the {source_origin!r} "
+                                    f"path, so the claim that failed is the "
+                                    f"backend's {hook!r} hook. Evidence written "
+                                    f"to {report}."
                                 )
                     if cache_key is not None:
-                        generation_cache.setdefault(cache_key, row)
+                        # A canary-verified row was really generated, so it
+                        # vouches for itself regardless of which fast path
+                        # would have served it.
+                        generation_cache.setdefault(
+                            cache_key,
+                            (
+                                row,
+                                "executed"
+                                if (reused_from is None or canary)
+                                else reused_from,
+                            ),
+                        )
                     handles[rho].write(json.dumps(row, ensure_ascii=False) + "\n")
                     sweep_rows.append(row)
                     progress.update(1)

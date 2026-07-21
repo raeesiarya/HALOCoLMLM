@@ -73,7 +73,8 @@ For example:
 ```
 
 The complete evaluation consists of the standard three-state audit, the
-entanglement sweep, and the adversarial evaluation:
+entanglement sweep, the adversarial evaluation, the DEL-OFF sensitivity
+control, and the deletion-policy matrix. All of them run by default:
 
 ```bash
 ./scripts/run_audit_suite_co_lmlm.sh
@@ -85,9 +86,20 @@ named `<output-dir>__<mode>`.
 
 The standard audit uses `geometric,value` closure by default. Radius and
 adversarial evaluations use `geometric` alone. Relevant configuration variables
-are `STANDARD_CLOSURE`, `SWEEP_CLOSURE`, `ADVERSARIAL_CLOSURE`, `RADIUS_GRID`,
-`NEIGHBOR_MODE`, `NEIGHBOR_MIN_COUNT`, and `DEL_OFF_MODE`. The legacy predicate
-name `semantic` is accepted as an alias for `value`.
+are `SUITE_PHASES`, `STANDARD_CLOSURE`, `SWEEP_CLOSURE`, `ADVERSARIAL_CLOSURE`,
+`RADIUS_GRID`, `NEIGHBOR_MODE`, `NEIGHBOR_MIN_COUNT`, and `DEL_OFF_MODE`. The
+legacy predicate name `semantic` is accepted as an alias for `value`.
+
+`SUITE_PHASES` narrows the run when needed: `all` (the default), `core`
+(`standard`, `sweep`, `adversarial` only), or an explicit comma-separated
+subset. This is mainly for resuming a partial run or iterating on one phase —
+the `del-off` and `policy` phases are a full standard audit per variant, so the
+default suite is roughly three times the cost of `core`:
+
+```bash
+SUITE_PHASES=core ./scripts/run_audit_suite_co_lmlm.sh
+SUITE_PHASES=sweep,adversarial ./scripts/run_audit_suite_co_lmlm.sh
+```
 
 ### DEL-OFF controls
 
@@ -99,6 +111,10 @@ retrieval tokens. The sensitivity script stores the two evaluations separately.
 ./scripts/run_del_off_sensitivity_co_lmlm.sh
 ```
 
+`DEL_OFF_MODES` restricts which controls run. The suite's `del-off` phase uses
+it to skip the arm the standard phase already covers, writing the remaining
+control to `<output-dir>/del_off_sensitivity/<mode>`.
+
 ### Deletion policies
 
 Oracle, geometric, value, provenance, and hybrid closure policies can be
@@ -107,6 +123,9 @@ evaluated in separate output directories.
 ```bash
 ./scripts/run_policy_matrix_co_lmlm.sh
 ```
+
+The suite's `policy` phase runs the same matrix under
+`<output-dir>/policy_matrix/<policy>`.
 
 ## Outputs
 

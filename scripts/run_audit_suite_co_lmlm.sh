@@ -21,10 +21,22 @@
 # computes the analysis. Do NOT shard by prompt file subsets — neighbor
 # sets N(f) are defined within a prompt file.
 #
+# The suite runs every published evaluation by default: the three phases
+# above, plus the DEL-OFF sensitivity control and the deletion-policy matrix.
+# SUITE_PHASES narrows that when you need it:
+#   all (default) = standard,sweep,adversarial,del-off,policy
+#   core          = standard,sweep,adversarial
+#   or an explicit comma-separated subset, e.g. SUITE_PHASES=standard,policy
+# Narrowing is mainly useful for resuming a partial run or iterating on one
+# phase; the del-off and policy phases are a full standard audit per variant
+# (one and four respectively, after de-duplication against phase 1), so the
+# default suite is roughly three times the cost of `core`.
+#
 # Optional:  CO_LMLM_DIR (defaults to ../Co-LMLM next to this repo; cloned
 #            from GitHub if absent), INDEX_DIR, PROMPTS, OUTPUT_DIR,
-#            STANDARD_CLOSURE, SWEEP_CLOSURE, ADVERSARIAL_CLOSURE,
-#            RADIUS_GRID, NEIGHBOR_MODE, NEIGHBOR_MIN_COUNT, DEL_OFF_MODE
+#            SUITE_PHASES, STANDARD_CLOSURE, SWEEP_CLOSURE,
+#            ADVERSARIAL_CLOSURE, RADIUS_GRID, NEIGHBOR_MODE,
+#            NEIGHBOR_MIN_COUNT, DEL_OFF_MODE
 # Extra flags are passed through to every phase, so keep --limit consistent
 # across re-runs: the shared FULL pass is resumed wholesale and only covers
 # the facts it was built with.
@@ -56,6 +68,39 @@ NEIGHBOR_MODE="${NEIGHBOR_MODE:-cosine}"
 NEIGHBOR_MIN_COUNT="${NEIGHBOR_MIN_COUNT:-5}"
 DEL_OFF_MODE="${DEL_OFF_MODE:-null-retrieval}"
 
+ALL_PHASES="standard,sweep,adversarial,del-off,policy"
+case "${SUITE_PHASES:-all}" in
+    core) SUITE_PHASES="standard,sweep,adversarial" ;;
+    all)  SUITE_PHASES="$ALL_PHASES" ;;
+esac
+
+phase_enabled() {
+    case ",$SUITE_PHASES," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Reject typos rather than silently skipping a phase the user asked for.
+for requested in ${SUITE_PHASES//,/ }; do
+    case ",$ALL_PHASES," in
+        *",$requested,"*) ;;
+        *)
+            echo "error: unknown phase '$requested' in SUITE_PHASES" >&2
+            echo "       valid phases: $ALL_PHASES (or 'core' / 'all')" >&2
+            exit 1
+            ;;
+    esac
+done
+
+PHASE_TOTAL=0
+for requested in ${SUITE_PHASES//,/ }; do
+    PHASE_TOTAL=$((PHASE_TOTAL + 1))
+done
+PHASE_INDEX=0
+
+announce() {
+    PHASE_INDEX=$((PHASE_INDEX + 1))
+    echo "=== Phase $PHASE_INDEX/$PHASE_TOTAL: $1 ==="
+}
+
 if [ ! -d "$CO_LMLM_DIR" ]; then
     echo "Co-LMLM checkout not found; cloning $CO_LMLM_REPO_URL -> $CO_LMLM_DIR"
     git clone "$CO_LMLM_REPO_URL" "$CO_LMLM_DIR"
@@ -82,15 +127,53 @@ run_audit() {
         "$@"
 }
 
-echo "=== Phase 1/3: standard audit (L(f), R(f), probe, closure manifests) ==="
-run_audit --closure "$STANDARD_CLOSURE" "$@"
+if phase_enabled standard; then
+    announce "standard audit (L(f), R(f), I(f), probe, closure manifests)"
+    run_audit --closure "$STANDARD_CLOSURE" "$@"
+fi
 
-echo "=== Phase 2/3: entanglement sweep (operating curves, G(f)) ==="
-run_audit --closure "$SWEEP_CLOSURE" --radius-grid "$RADIUS_GRID" \
-    --neighbor-mode "$NEIGHBOR_MODE" \
-    --neighbor-min-count "$NEIGHBOR_MIN_COUNT" "$@"
+if phase_enabled sweep; then
+    announce "entanglement sweep (operating curves, G(f))"
+    run_audit --closure "$SWEEP_CLOSURE" --radius-grid "$RADIUS_GRID" \
+        --neighbor-mode "$NEIGHBOR_MODE" \
+        --neighbor-min-count "$NEIGHBOR_MIN_COUNT" "$@"
+fi
 
-echo "=== Phase 3/3: adversarial closure (Ev, margin predictor) ==="
-run_audit --closure "$ADVERSARIAL_CLOSURE" --adversarial "$@"
+if phase_enabled adversarial; then
+    announce "adversarial closure (attack attribution, margin predictor)"
+    run_audit --closure "$ADVERSARIAL_CLOSURE" --adversarial "$@"
+fi
 
-echo "=== Audit suite complete ==="
+# The remaining phases delegate to the standalone scripts so the two entry
+# points cannot drift apart. Each re-enters the Co-LMLM environment; uv sync
+# is a no-op once warm.
+
+if phase_enabled del-off; then
+    # Phase 1 is already the "$DEL_OFF_MODE" arm of this comparison, so run
+    # only the complementary control when both phases are enabled.
+    if phase_enabled standard; then
+        case "$DEL_OFF_MODE" in
+            null-retrieval) sensitivity_modes="forbid-token" ;;
+            *)              sensitivity_modes="null-retrieval" ;;
+        esac
+        announce "DEL-OFF sensitivity ($sensitivity_modes; $DEL_OFF_MODE arm is phase 1)"
+    else
+        sensitivity_modes="null-retrieval forbid-token"
+        announce "DEL-OFF sensitivity ($sensitivity_modes)"
+    fi
+    CO_LMLM_DIR="$CO_LMLM_DIR" INDEX_DIR="$INDEX_DIR" PROMPTS="$PROMPTS" \
+    OUTPUT_DIR="$OUTPUT_DIR/del_off_sensitivity" \
+    STANDARD_CLOSURE="$STANDARD_CLOSURE" DEL_OFF_MODES="$sensitivity_modes" \
+        "$REPO_ROOT/scripts/run_del_off_sensitivity_co_lmlm.sh" "$@"
+fi
+
+if phase_enabled policy; then
+    # Note: if STANDARD_CLOSURE is overridden to match one of the policy
+    # labels, that policy is audited twice (once here, once as phase 1).
+    announce "deletion-policy matrix (oracle, geometric, value, provenance, hybrid)"
+    CO_LMLM_DIR="$CO_LMLM_DIR" INDEX_DIR="$INDEX_DIR" PROMPTS="$PROMPTS" \
+    OUTPUT_DIR="$OUTPUT_DIR/policy_matrix" DEL_OFF_MODE="$DEL_OFF_MODE" \
+        "$REPO_ROOT/scripts/run_policy_matrix_co_lmlm.sh" "$@"
+fi
+
+echo "=== Audit suite complete ($SUITE_PHASES) ==="

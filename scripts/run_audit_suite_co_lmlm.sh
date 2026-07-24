@@ -132,6 +132,53 @@ case ":${LD_LIBRARY_PATH:-}:" in
         ;;
 esac
 
+# faiss needs two kinds of native library that a bare `uv sync` does not make
+# loadable: OpenBLAS (a *system* package, absent on minimal cloud images) and
+# the RAPIDS/CUDA libs shipped inside the faiss-gpu-cu12-cuvs wheel without an
+# RPATH (put on the path by LD_LIBRARY_PATH above). Preflight the import here so
+# the suite either self-heals or fails with an actionable message, instead of
+# crashing deep in phase 1 behind Co-LMLM's misleading "public release required"
+# wrapper (it catches the underlying ImportError and re-raises).
+faiss_import_error() {
+    # Echo the missing-library line from a failed `import faiss`; empty if it imports.
+    uv run python -c "import faiss" 2>&1 >/dev/null \
+        | grep -oE 'lib[^:]*\.so[^:]*: cannot open shared object file' | head -n1 || true
+}
+
+ensure_faiss_importable() {
+    local err
+    err="$(faiss_import_error)"
+    [ -z "$err" ] && return 0
+
+    # OpenBLAS is a system package, not a wheel; install it if we can.
+    if printf '%s' "$err" | grep -q "libopenblas"; then
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "faiss needs OpenBLAS ($err); installing libopenblas0 ..."
+            local sudo=""
+            [ "$(id -u)" -ne 0 ] && sudo="sudo"
+            $sudo apt-get update && $sudo apt-get install -y libopenblas0
+        else
+            echo "error: faiss needs OpenBLAS but no apt-get to install it: $err" >&2
+            echo "       install it manually (Debian/Ubuntu: apt-get install libopenblas0)" >&2
+            exit 1
+        fi
+        err="$(faiss_import_error)"
+        [ -z "$err" ] && return 0
+    fi
+
+    # Anything left is a wheel-shipped lib that should already be on
+    # LD_LIBRARY_PATH — surface the path so a missing wheel is diagnosable.
+    echo "error: faiss cannot load a native library: $err" >&2
+    echo "       LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}" >&2
+    echo "       RAPIDS/CUDA libs ship in the faiss-gpu-cu12-cuvs wheel; confirm it" >&2
+    echo "       installed (find $CO_LMLM_DIR/.venv -name 'libcuvs.so*') and that its" >&2
+    echo "       lib dir is on the path above." >&2
+    exit 1
+}
+
+echo "Checking faiss native libraries ..."
+ensure_faiss_importable
+
 run_audit() {
     PYTHONPATH="$REPO_ROOT/src:src${PYTHONPATH:+:$PYTHONPATH}" \
     uv run python -m halo.run_audit \
